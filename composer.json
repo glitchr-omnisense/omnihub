@@ -1,0 +1,56 @@
+{
+    "name": "omnisense/omnihub",
+    "type": "library",
+    "description": "Omnihub: a package hub written once - the npm/UPM registry documents Unity's Package Manager reads (package documents, search, listing), the versions, the tarballs and their shasum/integrity, the hub manifest the hub clients read - for a forge with a database and for a static hub on GitHub Pages alike.",
+    "keywords": [
+        "upm",
+        "unity",
+        "npm",
+        "registry",
+        "hub",
+        "static",
+        "omnihub"
+    ],
+    "homepage": "https://github.com/glitchr-omnisense/omnihub",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Marco Meyer",
+            "email": "marco.meyer@glitchr.io"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "suggest": {
+        "omnihub/github": "A static hub's packages read from GitHub: each repository's releases, their .tgz assets and package.json",
+        "omnibridge/static": "To export a static hub (Omnihub\\Bridge\\Static\\HubSite) to a folder GitHub Pages serves",
+        "symfony/yaml": "To read hub.yaml (bin/omnihub); hub.json needs nothing"
+    },
+    "autoload": {
+        "psr-4": {
+            "Omnihub\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Omnihub\\Tests\\": "tests/"
+        }
+    },
+    "bin": [
+        "bin/omnihub"
+    ],
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.x-dev"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

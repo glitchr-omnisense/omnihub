@@ -1,0 +1,117 @@
+#!/usr/bin/env php
+<?php
+
+/*
+ * omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository] [--strict]
+ *
+ * A static hub: reads the configuration, reads every package (a provider per entry: github:
+ * owner/repository through omnihub/github, tarball: <address>), writes the registry and the hub
+ * manifest to the folder - with omnibridge/static when installed, directly otherwise.
+ */
+
+// The project's autoloader first (Composer names it to its bin proxies), then a checkout's own.
+foreach (array_filter([$GLOBALS['_composer_autoload_path'] ?? null, __DIR__.'/../../../autoload.php', getcwd().'/vendor/autoload.php', __DIR__.'/../vendor/autoload.php']) as $autoload) {
+    if (is_file($autoload)) {
+        require $autoload;
+        break;
+    }
+}
+
+use Omnihub\Bridge\Static\HubSite;
+use Omnihub\Source;
+use Omnihub\StaticHub;
+use Omnihub\TarballSource;
+
+$args = array_slice($argv, 1);
+$options = [];
+foreach ($args as $i => $arg) {
+    if (str_starts_with($arg, '--')) {
+        [$key, $value] = array_pad(explode('=', substr($arg, 2), 2), 2, true);
+        $options[$key] = $value;
+        unset($args[$i]);
+    }
+}
+[$command, $config, $out] = array_values($args) + [null, null, null];
+if ('build' !== $command || !$config || !$out) {
+    fwrite(STDERR, "omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository]\n");
+    exit(2);
+}
+
+$text = (string) file_get_contents($config);
+if (preg_match('/\.ya?ml$/i', $config)) {
+    if (!class_exists(\Symfony\Component\Yaml\Yaml::class)) {
+        fwrite(STDERR, "hub.yaml needs symfony/yaml (composer require symfony/yaml), or write hub.json.\n");
+        exit(2);
+    }
+    $settings = \Symfony\Component\Yaml\Yaml::parse($text);
+} else {
+    $settings = json_decode($text, true, 512, JSON_THROW_ON_ERROR);
+}
+
+$url = $options['url'] ?? $settings['url'] ?? throw new InvalidArgumentException('The hub\'s address: url in the configuration, or --url.');
+$hub = new StaticHub(
+    $url,
+    (string) ($settings['name'] ?? 'Hub'),
+    array_values((array) ($settings['scopes'] ?? [])),
+    array_map(fn (array $s) => Source::fromArray($s), (array) ($settings['sources'] ?? [])),
+    $settings['logo'] ?? null,
+    $settings['color'] ?? null,
+);
+
+$tarballs = [];
+$failures = [];
+$copies = (array) ($settings['copy'] ?? []);
+foreach ((array) ($settings['packages'] ?? []) as $entry) {
+    if (isset($entry['github'])) {
+        $class = 'Omnihub\\GitHub\\Repository';
+        if (!class_exists($class)) {
+            fwrite(STDERR, "\"github:\" entries need omnihub/github (composer require omnihub/github).\n");
+            exit(2);
+        }
+        // One repository that cannot be read does not keep the others from being published.
+        try {
+            $repository = $class::fromEnvironment((string) $entry['github'], $entry);
+            $hub->add($packages = iterator_to_array($repository->packages(), false));
+            fwrite(STDOUT, sprintf(" + %s: %s\n", $entry['github'], implode(', ', array_map(fn ($p) => $p->name.' '.implode(' ', array_map(fn ($v) => $v->version, $p->versions)), $packages)) ?: 'no release with a .tgz'));
+        } catch (Throwable $e) {
+            $failures[] = sprintf('%s: %s', $entry['github'], $e->getMessage());
+            fwrite(STDERR, sprintf(" ! %s: %s\n", $entry['github'], $e->getMessage()));
+        }
+    } elseif (isset($entry['file'])) {
+        // A tarball kept in the hub's own repository: published with the hub, at its path.
+        $path = dirname($config).'/'.ltrim((string) $entry['file'], '/');
+        $tarballs[] = ['url' => rtrim($url, '/').'/'.ltrim((string) $entry['file'], '/'), 'local' => $path] + array_intersect_key($entry, ['changelog' => 1, 'date' => 1]);
+        $copies[] = (string) $entry['file'];
+    } elseif (isset($entry['tarball'])) {
+        $tarballs[] = ['url' => (string) $entry['tarball']] + array_intersect_key($entry, ['changelog' => 1, 'date' => 1]);
+    }
+}
+if ($tarballs) {
+    $local = array_column(array_filter($tarballs, fn ($t) => isset($t['local'])), 'local', 'url');
+    $hub->add((new TarballSource(
+        array_map(fn ($t) => array_diff_key($t, ['local' => 1]), $tarballs),
+        fn (string $address) => isset($local[$address]) ? (string) file_get_contents($local[$address]) : TarballSource::download($address),
+    ))->packages());
+}
+
+if (!is_dir($out) && !mkdir($out, 0777, true) && !is_dir($out)) {
+    throw new RuntimeException(sprintf('Cannot make "%s".', $out));
+}
+if (class_exists(\Omnibridge\Static\Exporter::class)) {
+    $report = (new \Omnibridge\Static\Exporter(fn (string $line) => fwrite(STDOUT, $line."\n")))->export(HubSite::site($hub), $out);
+    fwrite(STDOUT, sprintf("%d packages, exported with omnibridge/static to %s\n", count($hub->packages()), $out));
+} else {
+    $files = $hub->writeTo($out);
+    fwrite(STDOUT, sprintf("%d packages, %d files written to %s\n", count($hub->packages()), count($files), $out));
+}
+// The logo, when it is a file beside the configuration, published with the hub.
+if (isset($settings['logo']) && !preg_match('~^https?://~', (string) $settings['logo'])) {
+    $copies[] = $settings['logo'];
+}
+foreach (array_unique($copies) as $file) {
+    $target = rtrim($out, '/').'/'.ltrim((string) $file, '/');
+    @mkdir(dirname($target), 0777, true);
+    copy(dirname($config).'/'.$file, $target);
+}
+// --strict: a package source that could not be read fails the build (the hub is written anyway).
+exit($failures && isset($options['strict']) ? 1 : 0);
