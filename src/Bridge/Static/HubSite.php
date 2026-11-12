@@ -11,13 +11,18 @@ use Omnihub\StaticHub;
 
 /**
  * A static hub as an omnibridge/static site: each of its files an address, exported to a folder
- * GitHub Pages serves (.nojekyll written).
+ * GitHub Pages serves (.nojekyll written) - with the files of the hub's repository published
+ * beside them (its logo, its kept tarballs), so the export's link check finds them.
  */
 final class HubSite
 {
-    public static function site(StaticHub $hub, bool $githubPages = true): Site
+    /** @param array<string, string> $assets address in the hub => file on disk */
+    public static function site(StaticHub $hub, bool $githubPages = true, array $assets = []): Site
     {
         $files = $hub->files();
+        foreach ($assets as $address => $path) {
+            $files['/'.ltrim($address, '/')] ??= ['application/octet-stream', fn () => (string) file_get_contents($path)];
+        }
 
         return (new Site($hub->url))
             ->githubPages($githubPages && str_ends_with((string) parse_url($hub->url, \PHP_URL_HOST), '.github.io'))
@@ -29,10 +34,12 @@ final class HubSite
                     return StaticResponse::notFound();
                 }
 
+                $body = $file[1] instanceof \Closure ? ($file[1])() : $file[1];
+
                 return match ($file[0]) {
-                    'text/html' => StaticResponse::html($file[1]),
-                    'application/json' => StaticResponse::json($file[1]),
-                    default => StaticResponse::bytes($file[1]),
+                    'text/html' => StaticResponse::html($body),
+                    'application/json' => StaticResponse::json($body),
+                    default => StaticResponse::bytes($body),
                 };
             }));
     }

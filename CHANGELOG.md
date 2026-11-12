@@ -16,6 +16,10 @@
 - `omnihub build --resolve-github [--github-cache=<file>]`: a `github`
   source resolved at build time by omnihub/github (public repositories only);
   without the flag it is left for the clients.
+- The files of the hub's repository (logo, theme pictures, kept tarballs)
+  are exported by omnibridge/static with the hub (`HubSite::site()`'s
+  `$assets`), so its link check finds them; `--strict` also fails on an
+  export error.
 - The hub clients named as they are now: Forge Store (`io.glitchr.store`),
   Forge Hub.
 

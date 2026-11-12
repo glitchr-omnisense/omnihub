@@ -126,18 +126,26 @@ if ($tarballs) {
 if (!is_dir($out) && !mkdir($out, 0777, true) && !is_dir($out)) {
     throw new RuntimeException(sprintf('Cannot make "%s".', $out));
 }
+// The files beside the configuration published with the hub: the copies asked, the kept tarballs, the pictures.
+$assets = [];
+foreach ($settings->copy as $file) {
+    $assets[$file] = dirname($config).'/'.$file;
+}
 if (class_exists(\Omnibridge\Static\Exporter::class)) {
-    $report = (new \Omnibridge\Static\Exporter(fn (string $line) => fwrite(STDOUT, $line."\n")))->export(HubSite::site($hub), $out);
+    $report = (new \Omnibridge\Static\Exporter(fn (string $line) => fwrite(STDOUT, $line."\n")))->export(HubSite::site($hub, true, $assets), $out);
     fwrite(STDOUT, sprintf("%d packages, exported with omnibridge/static to %s\n", count($hub->packages()), $out));
+    if ($report->hasErrors()) {
+        $failures[] = 'the export has errors (omnibridge-static.json)';
+    }
 } else {
     $files = $hub->writeTo($out);
-    fwrite(STDOUT, sprintf("%d packages, %d files written to %s\n", count($hub->packages()), count($files), $out));
+    foreach ($assets as $file => $path) {
+        $target = rtrim($out, '/').'/'.ltrim((string) $file, '/');
+        @mkdir(dirname($target), 0777, true);
+        copy($path, $target);
+    }
+    fwrite(STDOUT, sprintf("%d packages, %d files written to %s\n", count($hub->packages()), count($files) + count($assets), $out));
 }
-// The files beside the configuration published with the hub: the copies asked, the kept tarballs, the pictures.
-foreach ($settings->copy as $file) {
-    $target = rtrim($out, '/').'/'.ltrim((string) $file, '/');
-    @mkdir(dirname($target), 0777, true);
-    copy(dirname($config).'/'.$file, $target);
-}
-// --strict: a package source that could not be read fails the build (the hub is written anyway).
+// --strict: a package or a source that could not be read, or an export error (a broken link), fails
+// the build (the hub is written anyway).
 exit($failures && isset($options['strict']) ? 1 : 0);
