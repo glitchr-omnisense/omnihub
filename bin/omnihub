@@ -3,10 +3,18 @@
 
 /*
  * omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository] [--strict]
+ *               [--resolve-github [--github-cache=<file>]]
+ * omnihub check <hub.yaml|hub.json> [--url=...]
  *
- * A static hub: reads the configuration, reads every package (a provider per entry: github:
- * owner/repository through omnihub/github, tarball: <address>), writes the registry and the hub
- * manifest to the folder - with omnibridge/static when installed, directly otherwise.
+ * A static hub: reads the configuration (every error at once, each naming its key), reads every
+ * package (a provider per entry: github: owner/repository through omnihub/github, file: <path>,
+ * tarball: <address>), writes the registry and the hub manifest to the folder - with
+ * omnibridge/static when installed, directly otherwise.
+ *
+ * A "github" source (owner + pattern) is written into hub.json as it is, for the hub clients to
+ * resolve. With --resolve-github, omnihub/github resolves it now instead: the owner's public
+ * repositories that match, each a "git" source at its newest tag (ETag and rate limit respected;
+ * --github-cache keeps the answers between builds). A source it cannot resolve stays as it is.
  */
 
 // The project's autoloader first (Composer names it to its bin proxies), then a checkout's own.
@@ -18,8 +26,9 @@ foreach (array_filter([$GLOBALS['_composer_autoload_path'] ?? null, __DIR__.'/..
 }
 
 use Omnihub\Bridge\Static\HubSite;
+use Omnihub\HubConfig;
+use Omnihub\InvalidHubConfig;
 use Omnihub\Source;
-use Omnihub\StaticHub;
 use Omnihub\TarballSource;
 
 $args = array_slice($argv, 1);
@@ -32,36 +41,57 @@ foreach ($args as $i => $arg) {
     }
 }
 [$command, $config, $out] = array_values($args) + [null, null, null];
-if ('build' !== $command || !$config || !$out) {
-    fwrite(STDERR, "omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository]\n");
+if (!('build' === $command && $config && $out) && !('check' === $command && $config)) {
+    fwrite(STDERR, "omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository] [--strict] [--resolve-github [--github-cache=<file>]]\nomnihub check <hub.yaml|hub.json> [--url=...]\n");
     exit(2);
 }
 
-$text = (string) file_get_contents($config);
-if (preg_match('/\.ya?ml$/i', $config)) {
-    if (!class_exists(\Symfony\Component\Yaml\Yaml::class)) {
-        fwrite(STDERR, "hub.yaml needs symfony/yaml (composer require symfony/yaml), or write hub.json.\n");
-        exit(2);
-    }
-    $settings = \Symfony\Component\Yaml\Yaml::parse($text);
-} else {
-    $settings = json_decode($text, true, 512, JSON_THROW_ON_ERROR);
+try {
+    $settings = HubConfig::fromFile($config, is_string($options['url'] ?? null) ? $options['url'] : null);
+} catch (InvalidHubConfig $e) {
+    fwrite(STDERR, $e->getMessage()."\n");
+    exit(1);
+}
+if ('check' === $command) {
+    fwrite(STDOUT, sprintf("%s: %d packages, %d sources, %s.\n", $config, count($settings->packages), count($settings->sources), $settings->theme ? 'a theme' : 'no theme'));
+    exit(0);
 }
 
-$url = $options['url'] ?? $settings['url'] ?? throw new InvalidArgumentException('The hub\'s address: url in the configuration, or --url.');
-$hub = new StaticHub(
-    $url,
-    (string) ($settings['name'] ?? 'Hub'),
-    array_values((array) ($settings['scopes'] ?? [])),
-    array_map(fn (array $s) => Source::fromArray($s), (array) ($settings['sources'] ?? [])),
-    $settings['logo'] ?? null,
-    $settings['color'] ?? null,
-);
+$failures = [];
+$sources = $settings->sources;
+if (isset($options['resolve-github']) && $settings->githubSources()) {
+    if (!class_exists('Omnihub\\GitHub\\Owner')) {
+        fwrite(STDERR, "--resolve-github needs omnihub/github (composer require omnihub/github).\n");
+        exit(2);
+    }
+    $api = Omnihub\GitHub\Api::fromEnvironment(is_string($options['github-cache'] ?? null) ? $options['github-cache'] : null);
+    $owner = new Omnihub\GitHub\Owner($api);
+    $sources = [];
+    foreach ($settings->sources as $source) {
+        if (Source::GITHUB !== $source->type) {
+            $sources[] = $source;
+            continue;
+        }
+        $label = $source->owner.'/'.$source->pattern;
+        // A source that cannot be resolved (the rate limit, an unknown owner) stays for the clients.
+        try {
+            $resolved = $owner->resolve($source);
+            $sources = [...$sources, ...$resolved];
+            fwrite(STDOUT, sprintf(" + github %s: %s\n", $label, implode(', ', array_map(fn (Source $s) => $s->package.' '.$s->url, $resolved)) ?: 'no public repository with a package.json'));
+        } catch (Throwable $e) {
+            $sources[] = $source;
+            $failures[] = sprintf('github %s: %s', $label, $e->getMessage());
+            fwrite(STDERR, sprintf(" ! github %s: %s (left for the hub clients to resolve)\n", $label, $e->getMessage()));
+        }
+    }
+    $api->save();
+}
+$hub = $settings->hub($sources);
+$url = $settings->url;
+$config = (string) $config;
 
 $tarballs = [];
-$failures = [];
-$copies = (array) ($settings['copy'] ?? []);
-foreach ((array) ($settings['packages'] ?? []) as $entry) {
+foreach ($settings->packages as $entry) {
     if (isset($entry['github'])) {
         $class = 'Omnihub\\GitHub\\Repository';
         if (!class_exists($class)) {
@@ -81,7 +111,6 @@ foreach ((array) ($settings['packages'] ?? []) as $entry) {
         // A tarball kept in the hub's own repository: published with the hub, at its path.
         $path = dirname($config).'/'.ltrim((string) $entry['file'], '/');
         $tarballs[] = ['url' => rtrim($url, '/').'/'.ltrim((string) $entry['file'], '/'), 'local' => $path] + array_intersect_key($entry, ['changelog' => 1, 'date' => 1]);
-        $copies[] = (string) $entry['file'];
     } elseif (isset($entry['tarball'])) {
         $tarballs[] = ['url' => (string) $entry['tarball']] + array_intersect_key($entry, ['changelog' => 1, 'date' => 1]);
     }
@@ -104,11 +133,8 @@ if (class_exists(\Omnibridge\Static\Exporter::class)) {
     $files = $hub->writeTo($out);
     fwrite(STDOUT, sprintf("%d packages, %d files written to %s\n", count($hub->packages()), count($files), $out));
 }
-// The logo, when it is a file beside the configuration, published with the hub.
-if (isset($settings['logo']) && !preg_match('~^https?://~', (string) $settings['logo'])) {
-    $copies[] = $settings['logo'];
-}
-foreach (array_unique($copies) as $file) {
+// The files beside the configuration published with the hub: the copies asked, the kept tarballs, the pictures.
+foreach ($settings->copy as $file) {
     $target = rtrim($out, '/').'/'.ltrim((string) $file, '/');
     @mkdir(dirname($target), 0777, true);
     copy(dirname($config).'/'.$file, $target);

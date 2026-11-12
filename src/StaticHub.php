@@ -19,7 +19,7 @@ use Omnihub\Upm\Registry;
  */
 final class StaticHub
 {
-    /** @var list<Package> */
+    /** @var array<string, Package> by name */
     private array $packages = [];
 
     /**
@@ -34,6 +34,7 @@ final class StaticHub
         public readonly array $sources = [],
         public readonly ?string $logo = null,
         public readonly ?string $color = null,
+        public readonly ?Theme $theme = null,
     ) {
     }
 
@@ -66,9 +67,16 @@ final class StaticHub
             $scopes = array_values(array_unique($scopes));
         }
         $base = rtrim($this->url, '/');
-        $logo = $this->logo && !preg_match('~^https?://~', $this->logo) ? $base.'/'.ltrim($this->logo, '/') : $this->logo;
+        // A picture kept in the hub's repository is published with it: its address is the hub's.
+        $address = fn (string $picture) => preg_match('~^https?://~', $picture) ? $picture : $base.'/'.ltrim($picture, '/');
 
-        return new HubManifest($this->name, [new Source(Source::UPM, $base, $this->name, $scopes), ...$this->sources], $logo, $this->color);
+        return new HubManifest(
+            $this->name,
+            [new Source(Source::UPM, $base, $this->name, $scopes), ...$this->sources],
+            $this->logo ? $address($this->logo) : null,
+            $this->color,
+            theme: $this->theme?->withPictures($address),
+        );
     }
 
     /** @return array<string, array{0: string, 1: string}> address => [content type, body] */
@@ -98,13 +106,14 @@ final class StaticHub
             $latest = $package->latest();
             $rows .= '<tr><td><code>'.$e($package->name).'</code></td><td>'.$e((string) $package->field('displayName', '')).'</td><td>'.$e($latest?->version).'</td><td>'.$e((string) $package->field('description', '')).'</td></tr>';
         }
-        $scoped = json_encode(['scopedRegistries' => [['name' => $this->name, 'url' => $registry['url'], 'scopes' => $registry['scopes'] ?? []]]], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES);
-        $color = $this->color ?? '#222222';
+        $scoped = (string) json_encode(['scopedRegistries' => [['name' => $this->name, 'url' => $registry['url'], 'scopes' => $registry['scopes'] ?? []]]], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES);
+        $color = $this->theme?->color() ?? $this->color ?? '#222222';
 
         return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             .'<title>'.$e($this->name).'</title>'
             .'<style>body{font:16px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#222}h1{border-bottom:4px solid '.$e($color).'}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.4rem;border-bottom:1px solid #ddd;vertical-align:top}pre{background:#f4f4f4;padding:1rem;overflow:auto}</style>'
-            .'<h1>'.($this->logo ? '<img src="'.$e($manifest['logo'] ?? '').'" alt="" height="40"> ' : '').$e($this->name).'</h1>'
+            .(isset($manifest['theme']['banner']) ? '<img src="'.$e($manifest['theme']['banner']).'" alt="" style="width:100%;height:auto">' : '')
+            .'<h1>'.(isset($manifest['logo']) ? '<img src="'.$e($manifest['logo']).'" alt="" height="40"> ' : '').$e($this->name).'</h1>'
             .'<p>A Unity package hub. Add it to a project\'s <code>Packages/manifest.json</code>, then install from Window &gt; Package Manager &gt; My Registries:</p>'
             .'<pre>'.$e($scoped).'</pre>'
             .'<p>Or point a hub client at its manifest: <a href="-/hub.json"><code>'.$e($registry['url']).'/-/hub.json</code></a>.</p>'

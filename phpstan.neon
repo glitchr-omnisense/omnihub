@@ -1,0 +1,9 @@
+parameters:
+    level: 8
+    paths:
+        - src
+    ignoreErrors:
+        - identifier: missingType.iterableValue
+        # Optional: omnibridge/static (Bridge\Static\HubSite) and symfony/yaml (hub.yaml) are suggested, not required.
+        - message: '#Omnibridge\\Static\\|Symfony\\Component\\Yaml\\#'
+          reportUnmatched: false

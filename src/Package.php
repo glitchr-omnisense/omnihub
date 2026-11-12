@@ -3,7 +3,7 @@
 namespace Omnihub;
 
 /**
- * A package of a hub - com.glitchr.licensing - and the versions it may be installed at. Who
+ * A package of a hub - com.mystudio.tool - and the versions it may be installed at. Who
  * may see which version (a licence, a key) is the caller's business: it hands over what it shows.
  */
 final class Package
@@ -24,7 +24,7 @@ final class Package
         foreach ($versions as $version) {
             $list[$version->version] = $version;
         }
-        uksort($list, 'version_compare');
+        uksort($list, fn ($a, $b) => version_compare((string) $a, (string) $b));
         $this->versions = array_values($list);
     }
 

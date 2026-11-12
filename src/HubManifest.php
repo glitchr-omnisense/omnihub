@@ -3,9 +3,10 @@
 namespace Omnihub;
 
 /**
- * The hub manifest the hub clients read first - the Unity window (com.glitchr.hub), the
- * desktop hub: the hub's name, logo and colour, its sources, where its games are, and, only for
- * a hub that sells, its checkout (a device flow). A static hub never declares one.
+ * The hub manifest the hub clients read first - Forge Store, the Unity window (io.glitchr.store),
+ * Forge Hub, the desktop app: the hub's name, logo and colour, its theme, its sources, where its
+ * games are, and, only for a hub that sells, its checkout (a device flow). A static hub never
+ * declares one.
  */
 final class HubManifest
 {
@@ -22,19 +23,29 @@ final class HubManifest
         public readonly ?string $color = null,
         public readonly ?string $games = null,
         public readonly ?array $checkout = null,
+        public readonly ?Theme $theme = null,
     ) {
         if (null !== $color && !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
-            throw new \InvalidArgumentException(\sprintf('A colour is #rrggbb, not "%s".', $color));
+            throw new \InvalidArgumentException(\sprintf('color: a colour is #rrggbb, not "%s".', $color));
+        }
+        foreach (['logo' => $theme?->logo, 'banner' => $theme?->banner] as $key => $picture) {
+            if (null !== $picture && !preg_match('~^https?://~i', $picture)) {
+                throw new \InvalidArgumentException(\sprintf('theme.%s: a manifest gives an address (https://, which Forge Store requires), not "%s".', $key, $picture));
+            }
         }
     }
 
     public function toArray(): array
     {
+        $theme = $this->theme && !$this->theme->isEmpty() ? $this->theme : null;
+
+        // The older "color" and "logo" keys too, for the clients that read no theme.
         return array_filter([
             'version' => self::VERSION,
             'name' => $this->name,
-            'logo' => $this->logo,
-            'color' => $this->color,
+            'logo' => $this->logo ?? $theme?->logo,
+            'color' => $this->color ?? $theme?->color(),
+            'theme' => $theme?->toArray(),
             'sources' => array_map(fn (Source $source) => $source->toArray(), $this->sources),
             'games' => $this->games,
             'checkout' => $this->checkout,
