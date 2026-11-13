@@ -437,7 +437,7 @@ class OfflineLicenceTest extends TestCase
         $manifest = json_decode($hub->files()['/-/hub.json'][1], true);
         self::assertIsArray($manifest);
         self::assertIsArray($manifest['licensing']);
-        self::assertSame(['publicKey', 'registry', 'previousKey', 'rotation', 'previousKeyValidUntil'], array_keys($manifest['licensing']), 'omnibase/forge\'s names and order');
+        self::assertSame(['algorithm', 'publicKey', 'registry', 'previousKey', 'rotation', 'previousKeyValidUntil'], array_keys($manifest['licensing']), 'omnibase/forge\'s names and order');
         self::assertSame(self::HUB_REGISTRY, $manifest['licensing']['registry']);
         self::assertSame(1795564800, $manifest['licensing']['previousKeyValidUntil'], 'a JSON integer');
         self::assertSame([['package' => 'com.example.tool'], ['package' => 'com.example.paint', 'get' => 'https://shop.example.org/paint']], $manifest['licensed']);

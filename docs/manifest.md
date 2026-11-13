@@ -15,7 +15,7 @@ What a hub client reads first: Forge Store, the window in the Unity editor
     {"name": "A tool", "type": "git", "url": "https://github.com/acme/unity-tool.git", "package": "com.acme.tool"},
     {"name": "Acme on GitHub", "type": "github", "owner": "acme", "pattern": "unity-*"}
   ],
-  "licensing": {"publicKey": "5Wr6MvD/0ktioPo2QsSyiHKTCPeraqZf94+MwEYZ6cc=", "registry": "https://mystudio.github.io/hub"},
+  "licensing": {"algorithm": "Ed25519", "publicKey": "5Wr6MvD/0ktioPo2QsSyiHKTCPeraqZf94+MwEYZ6cc=", "registry": "https://mystudio.github.io/hub"},
   "licensed": [{"package": "com.mystudio.tool", "get": "https://mystudio.example/buy/tool"}]
 }
 ```
@@ -31,7 +31,9 @@ What a hub client reads first: Forge Store, the window in the Unity editor
   pictures of 1 MB at most). `color` and `logo`, the older keys, are written
   too (the accent as `#rrggbb`) for the clients that read no theme.
 - `licensing`: the Ed25519 public key the hub's licences are signed with,
-  data only - `publicKey` (32 bytes, standard base64 with its padding).
+  data only - `algorithm` (always `Ed25519`, written first, as a forge
+  writes it; `hub.yaml` may leave it out) and `publicKey` (32 bytes,
+  standard base64 with its padding).
   After a change of key, `previousKey` and `rotation` too: the previous key's
   Ed25519 signature of the UTF-8 text `forge-key-rotation:v1:` followed by
   `publicKey`. Forge Store pins the first key it reads (trust on first use)
@@ -57,8 +59,21 @@ What a hub client reads first: Forge Store, the window in the Unity editor
   key.
 - `games`: where a forge lists its games (a static hub has none).
 - `checkout`: `{"device": ..., "token": ...}`, a forge's device flow to buy
-  and link an editor. A client shows "Buy" only when it is there; a static
-  hub never writes it.
+  and link an editor, and, when the forge takes payments itself, the
+  one-click purchase's addresses after them: `quote` (the price to confirm),
+  `purchases`, `methods` (the buyer's saved payment methods). A client shows
+  "Buy" only when it is there; a static hub never writes it.
+- `licenses`: a forge's licence API, `{"list": ..., "activate": ...,
+  "release": ...}` - the key's licences and their machines, and the calls a
+  machine activates and releases itself with. A static hub never writes it.
+
+The keys are written in the order a forge serves them: `version`, `name`,
+`logo`, `color`, `theme`, `sources`, `games`, `checkout`, `licenses`,
+`licensing`, `licensed` (JSON readers do not care; a byte-for-byte snapshot
+does). `checkout` needs `device` and `token`, `licenses` its three
+addresses, each an `http(s)://` address; `color` must be `#rrggbb`.
 
 `Omnihub\HubManifest` builds it; `Omnihub\StaticHub::manifest()` for a
 static hub, from `hub.yaml` through `Omnihub\HubConfig`.
+`HubManifest::scopesOf($names)` gives the default scopes of the hub's
+own source (the first two segments of each package name, once each).

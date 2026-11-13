@@ -78,13 +78,7 @@ final class StaticHub
 
     public function manifest(): HubManifest
     {
-        $scopes = $this->scopes;
-        if (!$scopes) {
-            foreach ($this->packages as $package) {
-                $scopes[] = implode('.', \array_slice(explode('.', $package->name), 0, 2));
-            }
-            $scopes = array_values(array_unique($scopes));
-        }
+        $scopes = $this->scopes ?: HubManifest::scopesOf(array_map(fn (Package $package) => $package->name, array_values($this->packages)));
         $base = $this->registry();
         // A picture kept in the hub's repository is published with it: its address is the hub's.
         $address = fn (string $picture) => preg_match('~^https?://~', $picture) ? $picture : $base.'/'.ltrim($picture, '/');

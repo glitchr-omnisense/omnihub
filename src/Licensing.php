@@ -8,9 +8,11 @@ namespace Omnihub;
  * licences, and, after the hub changed its key, the previous key with its signature of the new
  * one.
  *
- *   {"publicKey": "<32 bytes, base64>", "registry": "https://owner.github.io/hub"}
- *   {"publicKey": "<new>", "registry": "...", "previousKey": "<old>", "rotation": "<64 bytes, base64>",
- *    "previousKeyValidUntil": 1795564800}
+ *   {"algorithm": "Ed25519", "publicKey": "<32 bytes, base64>", "registry": "https://owner.github.io/hub"}
+ *   {"algorithm": "Ed25519", "publicKey": "<new>", "registry": "...", "previousKey": "<old>",
+ *    "rotation": "<64 bytes, base64>", "previousKeyValidUntil": 1795564800}
+ *
+ * algorithm is always Ed25519, written first as a forge writes it; hub.yaml may leave it out.
  *
  * The rotation is the previous key's Ed25519 signature of the UTF-8 text
  * "forge-key-rotation:v1:" followed by the new key in base64. A key is standard base64 with its
@@ -27,7 +29,8 @@ namespace Omnihub;
 final class Licensing
 {
     public const ROTATION_PREFIX = 'forge-key-rotation:v1:';
-    public const KEYS = ['publicKey', 'registry', 'previousKey', 'rotation', 'previousKeyValidUntil'];
+    public const ALGORITHM = 'Ed25519';
+    public const KEYS = ['algorithm', 'publicKey', 'registry', 'previousKey', 'rotation', 'previousKeyValidUntil'];
 
     private const KEY_BYTES = 32;
     private const SECRET_BYTES = 64;
@@ -117,6 +120,10 @@ final class Licensing
             }
         }
 
+        $algorithm = $section['algorithm'] ?? null;
+        if (null !== $algorithm && self::ALGORITHM !== $algorithm) {
+            $problems[] = \sprintf('licensing.algorithm: %s, the only one the hub clients check (or leave it out).', self::ALGORITHM);
+        }
         $registry = $section['registry'] ?? null;
         if (null !== $registry) {
             if (!\is_string($registry)) {
@@ -169,6 +176,7 @@ final class Licensing
     public function toArray(): array
     {
         return array_filter([
+            'algorithm' => self::ALGORITHM,
             'publicKey' => $this->publicKey,
             'registry' => $this->registry,
             'previousKey' => $this->previousKey,

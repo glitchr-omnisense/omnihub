@@ -14,12 +14,12 @@
  * omnihub licence sign <private-key-file> [payload.json|-] --package <upm-name>|--software <slug>
  *                      --licensee <text> [--hub <hub.yaml>|--registry <url>] [--valid-until <day|unix>|--days <n>]
  *                      [--updates-until <day|unix>] [--machine <identifier>|--machine-hash <hex>]
- *                      [--log <file.jsonl> [--log-token]]
+ *                      [--issued-at <day|unix>] [--log <file.jsonl> [--log-token]]
  *                                                    an offline licence (format 2), the token alone on stdout
  * omnihub licence verify <public-key|hub.yaml|hub.json> <token|-> [--registry <url>] [--package <name>]
  *                      [--software <slug>] [--machine <identifier>|--machine-hash <hex>] [--at <day|unix>]
  *                                                    what Forge Store would say of a token; exit 1 when it refuses it
- * omnihub licence resign <new-private-key-file> <log.jsonl> [--hub <hub.yaml>] [--log <file.jsonl>]
+ * omnihub licence resign <new-private-key-file> <log.jsonl> [--hub <hub.yaml>|--registry <url>] [--log <file.jsonl> [--log-token]]
  *                                                    every logged licence signed again with a new key, after a rotation
  *
  * The private key lives on the author's machine, outside the hub's repository: nothing here prints
