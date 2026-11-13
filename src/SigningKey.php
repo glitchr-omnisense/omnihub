@@ -69,11 +69,19 @@ final class SigningKey
         return base64_encode(sodium_crypto_sign_publickey_from_secretkey($this->secret));
     }
 
+    /** Its public key's fingerprint, as Forge Store shows it (Licensing::fingerprint()). */
+    public function fingerprint(): string
+    {
+        return (new Licensing($this->publicKey()))->fingerprint();
+    }
+
     /**
      * The licensing section that hands the hub over from this (previous) key to $newKey: the new
-     * key, this one, and this one's signature of "forge-key-rotation:v1:" + the new key.
+     * key, this one, this one's signature of "forge-key-rotation:v1:" + the new key, and until when
+     * licences this key signed may still open (UNIX seconds; Forge Store keeps the previous key
+     * only with it, and 30 days at most after it saw the rotation).
      */
-    public function rotateTo(string $newKey): Licensing
+    public function rotateTo(string $newKey, ?int $previousKeyValidUntil = null): Licensing
     {
         $new = trim($newKey);
         $bytes = base64_decode($new, true);
@@ -82,12 +90,15 @@ final class SigningKey
         }
         $new = base64_encode($bytes);
 
-        return new Licensing($new, $this->publicKey(), base64_encode(sodium_crypto_sign_detached(Licensing::rotationMessage($new), $this->secret)));
+        return new Licensing($new, $this->publicKey(), base64_encode(sodium_crypto_sign_detached(Licensing::rotationMessage($new), $this->secret)), previousKeyValidUntil: $previousKeyValidUntil);
     }
 
     /**
      * A licence token signed offline, in Forge Seal's form (io.glitchr.licensing, LicenseToken):
-     * base64url(payload JSON) "." base64url(Ed25519 signature of the payload JSON), unpadded.
+     * base64url(payload JSON) "." base64url(Ed25519 signature of the payload JSON), unpadded. The
+     * payload is signed as given: OfflineLicence::payload() makes and checks an offline licence's.
+     *
+     * @param array<array-key, mixed> $payload
      */
     public function signToken(array $payload): string
     {
@@ -96,7 +107,11 @@ final class SigningKey
         return self::base64url($json).'.'.self::base64url(sodium_crypto_sign_detached($json, $this->secret));
     }
 
-    /** A token's payload when its signature verifies with $publicKey (base64); else null. */
+    /**
+     * A token's payload when its signature verifies with $publicKey (base64); else null.
+     *
+     * @return array<array-key, mixed>|null
+     */
     public static function verifyToken(string $token, string $publicKey): ?array
     {
         self::sodium();

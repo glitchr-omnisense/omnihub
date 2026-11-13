@@ -8,14 +8,15 @@ namespace Omnihub;
  *
  *   name, url, scopes, logo, color   the hub
  *   theme                            {accent, accentDark, logo, banner}: its look in the hub clients
- *   licensing                        {publicKey, previousKey, rotation}: the public key its licences are signed with
+ *   licensing                        {publicKey, previousKey, rotation, previousKeyValidUntil}: the public key its licences are signed with
+ *   licensed                         [{package, get}]: the packages sold with a licence, and where to get one
  *   packages                         its own packages: {github: owner/name}, {file: path}, {tarball: address}
  *   sources                          what else its manifest lists: upm, git, github (owner + pattern)
  *   copy                             files of the hub's repository published with it
  */
 final class HubConfig
 {
-    public const KEYS = ['name', 'url', 'scopes', 'logo', 'color', 'theme', 'licensing', 'packages', 'sources', 'copy'];
+    public const KEYS = ['name', 'url', 'scopes', 'logo', 'color', 'theme', 'licensing', 'licensed', 'packages', 'sources', 'copy'];
 
     /** The biggest picture Forge Store draws: 1 MB. */
     public const PICTURE_BYTES = 1048576;
@@ -28,6 +29,7 @@ final class HubConfig
      * @param list<Source>               $sources
      * @param list<array<string, mixed>> $packages
      * @param list<string>               $copy     files beside the configuration to publish: the copies asked, the kept tarballs, the pictures
+     * @param list<array{package: string, get?: string}> $licensed the packages sold with a licence (signed offline), and where to get one
      */
     private function __construct(
         public readonly string $name,
@@ -40,6 +42,7 @@ final class HubConfig
         public readonly array $packages,
         public readonly array $copy,
         public readonly ?Licensing $licensing = null,
+        public readonly array $licensed = [],
     ) {
     }
 
@@ -147,7 +150,37 @@ final class HubConfig
                 array_push($errors, ...$problems);
             } else {
                 $licensing = Licensing::fromArray($settings['licensing']);
+                // Written by the build from the hub's own address: given, it must be that one.
+                $registry = StaticHub::registryOf($address);
+                if (null !== $licensing->registry && !OfflineLicence::sameRegistry($licensing->registry, $registry)) {
+                    $errors[] = \sprintf('licensing.registry: the hub\'s own registry, %s (sources[0].url, which the build writes there) - not "%s"; leave it out.', $registry, $licensing->registry);
+                }
             }
+        }
+
+        $licensed = [];
+        foreach ($list('licensed', $settings['licensed'] ?? null) as $i => $entry) {
+            if (\is_string($entry)) {
+                $entry = ['package' => $entry];
+            }
+            if (!\is_array($entry) || array_is_list($entry) || array_diff(array_keys($entry), ['package', 'get'])) {
+                $errors[] = \sprintf('licensed[%d]: a package sold with a licence, {package: com.example.tool, get: https://<your shop>}.', $i);
+                continue;
+            }
+            $package = $entry['package'] ?? null;
+            $get = $entry['get'] ?? null;
+            if (!\is_string($package) || !OfflineLicence::isPackageName($package) || \in_array($package, array_column($licensed, 'package'), true)) {
+                $errors[] = \sprintf('licensed[%d].package: a UPM name ("com.example.tool"), once, not %s.', $i, json_encode($package, \JSON_UNESCAPED_SLASHES));
+                continue;
+            }
+            if (null !== $get && (!\is_string($get) || !preg_match('~^https://[^\s/]+~i', $get))) {
+                $errors[] = \sprintf('licensed[%d].get: the https:// address where a licence is bought (a shop, a payment link), not %s.', $i, json_encode($get, \JSON_UNESCAPED_SLASHES));
+                continue;
+            }
+            $licensed[] = array_filter(['package' => $package, 'get' => $get], fn ($value) => null !== $value);
+        }
+        if ($licensed && null === $licensing && !$errors) {
+            $errors[] = 'licensed: packages sold with a licence need the key their licences are signed with (licensing.publicKey; omnihub key generate).';
         }
 
         $sources = [];
@@ -247,7 +280,7 @@ final class HubConfig
             throw new InvalidHubConfig($label, $errors);
         }
 
-        return new self($name, $address, $scopes, $logo, $color, $theme, $sources, $packages, array_values(array_unique($copy)), $licensing);
+        return new self($name, $address, $scopes, $logo, $color, $theme, $sources, $packages, array_values(array_unique($copy)), $licensing, $licensed);
     }
 
     /**
@@ -263,6 +296,12 @@ final class HubConfig
     /** @param list<Source>|null $sources the sources as resolved, else as configured */
     public function hub(?array $sources = null): StaticHub
     {
-        return new StaticHub($this->url, $this->name, $this->scopes, $sources ?? $this->sources, $this->logo, $this->color, $this->theme, $this->licensing);
+        return new StaticHub($this->url, $this->name, $this->scopes, $sources ?? $this->sources, $this->logo, $this->color, $this->theme, $this->licensing, $this->licensed);
+    }
+
+    /** The hub's own registry, as its manifest lists it (sources[0].url) and as its licences name it. */
+    public function registry(): string
+    {
+        return StaticHub::registryOf($this->url);
     }
 }

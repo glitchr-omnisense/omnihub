@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Offline licences that Forge Store 1.5.0, Forge Seal 1.1.0 and Forge Hub 1.3.1
+  accept (format 2, bound to the hub's registry and the package):
+  `omnihub licence sign <private-key-file> [payload.json|-]` takes `--hub`
+  (default `./hub.yaml`: its registry, and the key checked against its
+  `licensing.publicKey`) or `--registry`, `--package` or `--software`,
+  `--licensee`, `--valid-until`/`--days`, `--updates-until`, `--machine`
+  (hashed as the clients hash Unity's device identifier) or `--machine-hash`,
+  `--issued-at`, `--log <file.jsonl>` (`--log-token`); `v` forced to 2, the
+  payload in omnibase/forge's field order and checked before signing (one line
+  per problem), the token alone on stdout, a summary on stderr. A payload
+  file or stdin is still read, the flags overriding it; a misspelt flag is
+  refused. `Omnihub\OfflineLicence` (the payload, its rules, the machine's
+  hash, the registry comparison), `Omnihub\LicenceCheck` (the clients' check,
+  their order and words), `Omnihub\LicenceLog`.
+- `omnihub licence verify <public-key|hub.yaml|hub.json> <token|->` (or
+  `<token> --hub|--key`): what Forge Store would say, exit 1 when it refuses;
+  public keys only.
+- `omnihub licence resign <new-private-key-file> <log.jsonl>`: every logged
+  licence signed again with the new key after a rotation.
+- `omnihub key rotate ... [--previous-until <day|unix>]` writes
+  `previousKeyValidUntil` (30 days from now by default).
+- `hub.json`'s `licensing` carries `registry` (the hub's registry,
+  `sources[0].url`, from one function: `StaticHub::registry()`,
+  `HubConfig::registry()`) and, after a rotation, `previousKeyValidUntil`;
+  `Licensing::KEYS` accepts both (a `registry` in `hub.yaml` must be the
+  hub's own).
+- `licensed` in `hub.yaml` and `hub.json`: the packages sold with a licence and
+  their "get" link, for the clients to show "Get" only there; the hub's page
+  links them.
+- PHPStan's baseline is gone: the licensing files' findings are fixed.
+
 - On omnisense/contracts (`^1.0@dev`), the kernel of the omni families, and
   `symfony/http-client-contracts`: every request through the kit's HTTP client
   (`Omnihub\Http\JsonClient`, `Omnihub\Http\Downloader`) - sent once
@@ -21,8 +52,8 @@
 - `docker/`: the family's harness - the core, omnihub/github and
   omnisense/contracts from their checkouts (or GitHub), `test`, `phpstan`,
   `bare` and bin/omnihub's commands; no Docker network created.
-- PHPStan at level max on `src/` and `tests/` (it was level 8 on `src/`); the
-  baseline holds only the licensing key code's findings. `BareTest`: every
+- PHPStan at level max on `src/` and `tests/` (it was level 8 on `src/`),
+  without a baseline. `BareTest`: every
   class loads with omnisense/contracts and the HTTP client contracts alone.
 - A package.json field that is neither text nor a number (an object as a
   `displayName`, a list as a `name`) is left out of the hub's page and search,

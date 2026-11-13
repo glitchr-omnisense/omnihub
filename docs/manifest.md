@@ -15,7 +15,8 @@ What a hub client reads first: Forge Store, the window in the Unity editor
     {"name": "A tool", "type": "git", "url": "https://github.com/acme/unity-tool.git", "package": "com.acme.tool"},
     {"name": "Acme on GitHub", "type": "github", "owner": "acme", "pattern": "unity-*"}
   ],
-  "licensing": {"publicKey": "5Wr6MvD/0ktioPo2QsSyiHKTCPeraqZf94+MwEYZ6cc="}
+  "licensing": {"publicKey": "5Wr6MvD/0ktioPo2QsSyiHKTCPeraqZf94+MwEYZ6cc=", "registry": "https://mystudio.github.io/hub"},
+  "licensed": [{"package": "com.mystudio.tool", "get": "https://mystudio.example/buy/tool"}]
 }
 ```
 
@@ -38,6 +39,22 @@ What a hub client reads first: Forge Store, the window in the Unity editor
   other change waits for the user. `Omnihub\Licensing` checks it (the
   rotation with sodium); a static hub's author makes the keys with
   `omnihub key` (README, "Licences signed offline").
+  - `registry`: the address the hub's licences name (their `registry`) -
+    a static hub's own registry, `sources[0].url`, written by the build; a
+    forge's `https://<site>/upm`. Forge Store 1.5.0 reads it
+    (`HubLicensing.Registry`); the binding itself compares a licence with the
+    registry the package is installed from.
+  - `previousKeyValidUntil` (UNIX seconds, a JSON integer; after a rotation
+    only): until when licences the previous key signed may open. Forge Store
+    keeps the previous key until min(that, the rotation seen + 30 days), and
+    never without it; `omnihub key rotate --previous-until` writes it (30 days
+    from now by default).
+- `licensed` (a static hub, optional): the packages sold with a licence its
+  author signs offline, each `{"package": <UPM name>, "get": <https address
+  where one is bought, optional>}`. Written only with `licensing`. A client
+  that reads it offers "Get" and the licence field on those packages only;
+  without it (an older hub), on every package of a store that publishes a
+  key.
 - `games`: where a forge lists its games (a static hub has none).
 - `checkout`: `{"device": ..., "token": ...}`, a forge's device flow to buy
   and link an editor. A client shows "Buy" only when it is there; a static

@@ -61,6 +61,8 @@ sources:
   - { name: Acme on GitHub, type: github, owner: acme, pattern: "unity-*", install: false }
 licensing:                                   # the public key the hub's licences are signed with
   publicKey: "<base64>"                      # omnihub key generate <a path outside the repository>
+licensed:                                    # optional: the packages sold with a licence, and where to buy one
+  - { package: com.mystudio.tool, get: "https://mystudio.example/buy/tool" }
 ```
 
 `omnihub check hub.yaml` reads it without building: every error at once,
@@ -81,6 +83,8 @@ vendor/bin/omnihub key generate ~/.config/omnihub/mystudio.key   # the private k
 ```yaml
 licensing:
   publicKey: "<what key generate printed: 32 bytes, base64>"
+licensed:                                    # optional (see below)
+  - { package: com.mystudio.tool, get: "https://mystudio.example/buy/tool" }
 ```
 
 - **The private key never goes into the hub's repository**, nor into
@@ -90,34 +94,133 @@ licensing:
   private key pasted as `publicKey`, and a private key listed in `copy` -
   without repeating its value. Keep a copy in a password manager: a lost key
   means a new one and a rotation nobody can sign.
-- **Sign a licence**: `omnihub licence sign <private-key-file> <payload.json|->`
-  prints a token in Forge Seal's form (`base64url(payload JSON) "."
-  base64url(Ed25519 signature)`, as omnibase/forge signs them). The payload is
-  yours (for a game, Forge Seal's `LicenseToken.Check` reads `software`,
-  `machine`, `valid_until`); what binds a licence to its registry (plan item
-  17.2) is not fixed yet.
-- **Change the key** with a rotation the old key signs: Forge Store then moves
-  its users' pin without asking them.
+- The build writes `licensing.registry` into `hub.json`: the hub's own
+  registry, the address its manifest lists first (`sources[0].url`, which
+  Forge Store writes as the project's scoped registry) - the address every
+  licence names.
 
-  ```sh
-  vendor/bin/omnihub key generate ~/.config/omnihub/mystudio-2.key
-  vendor/bin/omnihub key rotate ~/.config/omnihub/mystudio.key ~/.config/omnihub/mystudio-2.key
-  ```
+#### From the sale to the delivery
 
-  prints the section to paste: `publicKey` (the new key), `previousKey` (the
-  old one) and `rotation`, the old key's Ed25519 signature of the UTF-8 text
-  `forge-key-rotation:v1:` + the new key in base64. `omnihub check` verifies
-  it (PHP's sodium). A rotation covers one step: a user who missed two is
-  asked. Without a valid rotation, every user must accept the new key by hand.
-  Either way Forge Store then trusts the new key only: licences signed with
-  the old one stop passing and are signed again with the new key.
-- `omnihub key public <private-key-file>` prints a private key's public key.
-  The key file is sodium's 64-byte secret key in base64 - the form
-  omnibase/forge reads from `FORGE_LICENSE_SIGNING_KEY`, so a hub's key can
-  move to a forge.
+```sh
+# The buyer paid through your link; you sign their licence, in the hub's folder (./hub.yaml):
+vendor/bin/omnihub licence sign ~/.config/omnihub/mystudio.key \
+    --package com.mystudio.tool --licensee "Ada <ada@example.org>" \
+    --log ~/.config/omnihub/sales.jsonl > ada.licence
+# Check it as Forge Store will (exit 1 when it would refuse it):
+vendor/bin/omnihub licence verify hub.yaml "$(cat ada.licence)" --package com.mystudio.tool
+# Send ada.licence's one line to the buyer: in Forge Store, the package's "Enter a licence".
+```
 
-This is light protection, not DRM: a key checked offline can be shared, and
-nothing counts or revokes it - that takes a forge.
+`licence sign <private-key-file> [payload.json|-]` prints the token alone on
+stdout (one line, for an e-mail) and a summary on stderr (package, licensee,
+"no end" or "until", "any machine" or the machine's hash, the key's
+fingerprint as Forge Store shows it) - never the private key. Its flags:
+
+| Flag | |
+|---|---|
+| `--hub <hub.yaml>` | default `./hub.yaml` when there is one (and no `--registry`): the registry taken from it - the same function as the manifest's `sources[0].url` -, and the key checked against its `licensing.publicKey` ("this key does not sign for this hub: <fingerprint> vs <fingerprint>") |
+| `--registry <url>` | without a hub.yaml: https (http only for localhost), a final slash dropped |
+| `--package <upm-name>` | the package it opens (a UPM name; a warning when hub.yaml's scopes do not cover it, when hub.yaml installs it from Git, or when its `licensed` list does not name it) |
+| `--software <slug>` | a game or an application instead (Forge Seal's `LicenseToken.Check` with its slug): then no `--package` |
+| `--licensee <text>` | required: who it was sold to; no control characters, 200 characters at most |
+| `--valid-until <YYYY-MM-DD\|unix>` or `--days <n>` | optional; nothing: no end. A day is its first second, UTC - the day Forge Store shows as "until" |
+| `--updates-until <YYYY-MM-DD\|unix>` | optional: the releases it covers (Forge Seal's `LicensePayload.Covers`) |
+| `--machine <identifier>` | optional: one machine - Unity's `SystemInfo.deviceUniqueIdentifier` as the buyer's Unity reports it, hashed here (SHA-256, lowercase hex, of the identifier trimmed of Unicode white space, in UTF-8: what the clients hash), never written in clear |
+| `--machine-hash <64 hex>` | optional: the hash a buyer sent, taken as given (written in lowercase) |
+| `--issued-at <YYYY-MM-DD\|unix>` | optional: default now |
+| `--log <file.jsonl>` | optional: one line appended per licence - the payload and the key's fingerprint, never the key, the token only with `--log-token`; created 0600, with a warning inside a git work tree (it names your buyers) |
+
+Without `--machine` or `--machine-hash` the licence opens on any machine. A
+payload file (or stdin) is still read; the flags override it. What is signed
+is checked first, one line per problem: `v` forced to 2, `registry` an
+absolute https address, `package` or `software` (one of them), `machine` 64
+lowercase hex digits, times JSON integers, `valid_until` after `issued_at`,
+no other field. The payload, in omnibase/forge's field order:
+
+```json
+{"v": 2, "registry": "https://mystudio.github.io/hub", "package": "com.mystudio.tool",
+ "licensee": "Ada <ada@example.org>", "issued_at": 1792972800}
+```
+
+| Field | |
+|---|---|
+| `v` | 2: bound to its store. A format 1 token (no registry) is refused by Forge Store and by Forge Seal's bound checks |
+| `software` | a game's slug (then no `package`) |
+| `registry` | the hub's registry as clients know it, `sources[0].url`; compared with a final slash, the scheme's and the host's case and a default port aside, the path keeping its case |
+| `package` | the UPM name it opens |
+| `licensee` | who it was sold to; Forge Store shows "Licensed to ..." |
+| `machine` | absent: any machine. SHA-256 hex of the machine's identifier; present and different: refused |
+| `issued_at` | UNIX seconds |
+| `valid_until` | absent: no end |
+| `updates_until` | absent: every release |
+
+`omnihub licence verify <public-key|hub.yaml|hub.json> <token|->` (or
+`licence verify <token> --hub <file>` / `--key <base64>`) reads a token as
+Forge Store, Forge Seal and Forge Hub check it, in their order and with their
+words - signature (the hub's key, or its previous key while
+`previousKeyValidUntil` runs), format, registry, package, machine, end - and
+says "Forge Store opens it." (exit 0) or "Forge Store refuses it: <why>"
+(exit 1). The registry comes from the hub (`hub.yaml`, or a published
+`hub.json`) or `--registry`; `--package`, `--software`, `--machine` /
+`--machine-hash` and `--at <day>` compare more; what is not given is said not
+compared. It takes public keys only: a private key given by mistake is
+refused without being printed.
+
+What a static hub's licence checks: the store, the package, an end, and one
+machine when the seller asked for it. What it cannot: seats and revocation -
+a copied token opens wherever it is pasted. **Light protection, not DRM.**
+
+#### Changing the key
+
+```sh
+vendor/bin/omnihub key generate ~/.config/omnihub/mystudio-2.key
+vendor/bin/omnihub key rotate ~/.config/omnihub/mystudio.key ~/.config/omnihub/mystudio-2.key [--previous-until 2026-12-31]
+```
+
+prints the section to paste: `publicKey` (the new key), `previousKey` (the
+old one), `rotation` - the old key's Ed25519 signature of the UTF-8 text
+`forge-key-rotation:v1:` + the new key in base64 - and
+`previousKeyValidUntil` (UNIX seconds; 30 days from now unless
+`--previous-until`). `omnihub check` verifies the rotation (PHP's sodium).
+Forge Store then moves its users' pin without asking them, and keeps the old
+key for licences until min(`previousKeyValidUntil`, the moment it saw the
+rotation + 30 days) - never without `previousKeyValidUntil`. A rotation
+covers one step: a user who missed two is asked. Without a valid rotation,
+every user must accept the new key by hand.
+
+**Offline licences without an end signed with the old key stop opening in
+Forge Store at most 30 days after a rotation.** Sign them again with the new
+key - the `--log` file has every payload sold:
+
+```sh
+vendor/bin/omnihub licence resign ~/.config/omnihub/mystudio-2.key ~/.config/omnihub/sales.jsonl --log ~/.config/omnihub/sales.jsonl
+```
+
+prints one line per licence, `licensee<TAB>package<TAB>token`, each payload
+as it was sold, for you to send each buyer their new token; licences that ran
+out, and those the new key already signed, are left. A game ships its key:
+after a rotation it is released again with the new one.
+
+`omnihub key public <private-key-file>` prints a private key's public key.
+The key file is sodium's 64-byte secret key in base64 - the form
+omnibase/forge reads from `FORGE_LICENSE_SIGNING_KEY`, so a hub's key can
+move to a forge.
+
+#### What is sold: `licensed`
+
+A static hub has no catalogue, so a client cannot tell a paid package from a
+free one. `licensed` (optional, in `hub.yaml`) lists the packages sold with a
+licence, each with the address where one is bought (`get`, https, optional),
+and the build writes it into `hub.json` as it is:
+
+```json
+"licensed": [{"package": "com.mystudio.tool", "get": "https://mystudio.example/buy/tool"}]
+```
+
+It needs the `licensing` key. The hub's page marks those packages and links
+to `get`. Forge Store and Forge Hub do not read it yet (they offer "Enter a
+licence" on every package of a store that publishes a key); once they do,
+they show "Get" and the licence field only there.
 
 ### A GitHub owner as a source
 
@@ -194,7 +297,7 @@ docker compose run --rm omnihub build /omnihub/core/docker/harness/hub.yaml /har
 
 `tests/BareTest.php` (the kit's `BareTestCase`) checks that every class of the
 core loads with nothing but omnisense/contracts and Symfony's HTTP client
-contracts, and runs the bare script. PHPStan runs at level max; its baseline
-holds only the licensing key code's findings, and may only shrink.
+contracts, and runs the bare script. PHPStan runs at level max, without a
+baseline.
 
 MIT.

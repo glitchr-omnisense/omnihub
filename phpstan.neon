@@ -1,9 +1,6 @@
 # PHPStan at the highest level, as the family's harness runs it (docker compose run --rm omnihub
-# phpstan, in omnisense/omnihub's docker/). Anything PHPStan reports fails. phpstan-baseline.neon
-# holds only what the licensing key code (Licensing, SigningKey and their test) had when PHPStan came
-# in at this level (2026-11-13), left for the change that extends `licence sign`: it may only shrink.
-includes:
-    - phpstan-baseline.neon
+# phpstan, in omnisense/omnihub's docker/). Anything PHPStan reports fails; there is no
+# baseline.
 
 parameters:
     level: max

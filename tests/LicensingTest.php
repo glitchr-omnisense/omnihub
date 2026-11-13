@@ -40,9 +40,28 @@ class LicensingTest extends TestCase
         exec('rm -rf '.escapeshellarg($this->dir));
     }
 
+    /**
+     * @param array<string, mixed> $settings
+     *
+     * @return array<array-key, mixed>
+     */
     private static function manifest(array $settings): array
     {
-        return json_decode(HubConfig::fromArray($settings + ['name' => 'Acme'], self::URL)->hub()->files()['/-/hub.json'][1], true);
+        $manifest = json_decode(HubConfig::fromArray($settings + ['name' => 'Acme'], self::URL)->hub()->files()['/-/hub.json'][1], true);
+        self::assertIsArray($manifest);
+
+        return $manifest;
+    }
+
+    /** @return non-empty-string the bytes of a base64 text */
+    private static function raw(string $base64): string
+    {
+        $bytes = (string) base64_decode($base64, true);
+        if ('' === $bytes) {
+            self::fail('not base64: '.$base64);
+        }
+
+        return $bytes;
     }
 
     /** @return list<string> */
@@ -66,7 +85,7 @@ class LicensingTest extends TestCase
     public function testTheKeyIsExportedAsForgeStoreReadsIt(): void
     {
         $manifest = self::manifest(['licensing' => ['publicKey' => ' '.self::OLD.' ']]);
-        self::assertSame(['publicKey' => self::OLD], $manifest['licensing'], 'HubLicensing.Of reads licensing.publicKey');
+        self::assertSame(['publicKey' => self::OLD, 'registry' => self::URL], $manifest['licensing'], 'HubLicensing.Of reads licensing.publicKey, Forge Store 1.5.0 licensing.registry');
         self::assertArrayNotHasKey('checkout', $manifest, 'a static hub still sells through no server');
 
         $page = HubConfig::fromArray(['licensing' => ['publicKey' => self::OLD]], self::URL)->hub()->files()['/'][1];
@@ -77,8 +96,8 @@ class LicensingTest extends TestCase
     public function testForgeStoresRotationVectorVerifies(): void
     {
         $manifest = self::manifest(['licensing' => ['publicKey' => self::NEW, 'previousKey' => self::OLD, 'rotation' => self::ROTATION]]);
-        self::assertSame(['publicKey' => self::NEW, 'previousKey' => self::OLD, 'rotation' => self::ROTATION], $manifest['licensing']);
-        self::assertTrue(sodium_crypto_sign_verify_detached(base64_decode(self::ROTATION), 'forge-key-rotation:v1:'.self::NEW, base64_decode(self::OLD)), 'the signed text is KeyPins\' RotationMessage');
+        self::assertSame(['publicKey' => self::NEW, 'registry' => self::URL, 'previousKey' => self::OLD, 'rotation' => self::ROTATION], $manifest['licensing']);
+        self::assertTrue(sodium_crypto_sign_verify_detached(self::raw(self::ROTATION), 'forge-key-rotation:v1:'.self::NEW, self::raw(self::OLD)), 'the signed text is KeyPins\' RotationMessage');
     }
 
     public function testARotationThatDoesNotVerifyIsRefused(): void
@@ -107,7 +126,7 @@ class LicensingTest extends TestCase
         self::assertSame([
             'licensing.privateKey: a private key never belongs in the hub\'s configuration - remove it, keep it out of the repository (and make a new one if it was ever committed: omnihub key generate).',
             'licensing.secret: a private key never belongs in the hub\'s configuration - remove it, keep it out of the repository (and make a new one if it was ever committed: omnihub key generate).',
-            'licensing.colour: not a key of licensing (publicKey, previousKey, rotation).',
+            'licensing.colour: not a key of licensing (publicKey, registry, previousKey, rotation, previousKeyValidUntil).',
             'licensing.publicKey: 64 bytes is a private key (sodium\'s secret key), not a public one - remove it from the configuration and from the repository\'s history, and make a new pair (omnihub key generate).',
         ], $errors);
         self::assertStringNotContainsString($private, implode("\n", $errors));
@@ -118,7 +137,7 @@ class LicensingTest extends TestCase
         self::assertSame(['licensing.publicKey: a text in base64, not int.'], self::errors(['publicKey' => 42]));
         self::assertSame(['licensing.rotation: an Ed25519 signature is 32 bytes, not 64.'], self::errors(['publicKey' => self::NEW, 'previousKey' => self::OLD, 'rotation' => self::OTHER]));
         self::assertStringStartsWith('licensing.publicKey: the Ed25519 public key', self::errors([])[0] ?? '');
-        self::assertSame(['licensing: a mapping of publicKey (and, after a change of key, previousKey and rotation).'], self::errors(self::OLD));
+        self::assertSame(['licensing: a mapping of publicKey (and, after a change of key, previousKey, rotation and previousKeyValidUntil).'], self::errors(self::OLD));
     }
 
     public function testThePrivateKeyStaysWithTheAuthor(): void
@@ -159,8 +178,8 @@ class LicensingTest extends TestCase
         $new = SigningKey::generate();
         $licensing = $old->rotateTo($new->publicKey());
         self::assertSame($old->publicKey(), $licensing->previousKey);
-        self::assertTrue(sodium_crypto_sign_verify_detached(base64_decode((string) $licensing->rotation), Licensing::ROTATION_PREFIX.$new->publicKey(), base64_decode($old->publicKey())));
-        self::assertSame($licensing->toArray(), self::manifest(['licensing' => $licensing->toArray()])['licensing'], 'and it passes hub.yaml\'s check');
+        self::assertTrue(sodium_crypto_sign_verify_detached(self::raw((string) $licensing->rotation), Licensing::ROTATION_PREFIX.$new->publicKey(), self::raw($old->publicKey())));
+        self::assertSame(['publicKey' => $licensing->publicKey, 'registry' => self::URL] + $licensing->toArray(), self::manifest(['licensing' => $licensing->toArray()])['licensing'], 'and it passes hub.yaml\'s check');
     }
 
     public function testALicenceTokenInForgeSealsForm(): void
@@ -189,9 +208,11 @@ class LicensingTest extends TestCase
         }
     }
 
+    /** @return array{0: int, 1: string, 2: string} [exit code, stdout, stderr] */
     private function bin(string $arguments, ?string $stdin = null): array
     {
-        $process = proc_open(\sprintf('%s %s %s', escapeshellarg(PHP_BINARY), escapeshellarg(\dirname(__DIR__).'/bin/omnihub'), $arguments), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        $process = proc_open(\sprintf('%s %s %s', escapeshellarg(PHP_BINARY), escapeshellarg(\dirname(__DIR__).'/bin/omnihub'), $arguments), [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $this->dir);
+        self::assertIsResource($process);
         fwrite($pipes[0], (string) $stdin);
         fclose($pipes[0]);
         $out = (string) stream_get_contents($pipes[1]);
@@ -210,7 +231,9 @@ class LicensingTest extends TestCase
         self::assertStringNotContainsString($private, $out.$err, 'the private key is never printed');
         self::assertStringContainsString('inside the git work tree', $err);
         self::assertMatchesRegularExpression('~licensing:\n  publicKey: "([A-Za-z0-9+/]{43}=)"~', $out);
-        preg_match('~publicKey: "([^"]+)"~', $out, $match);
+        if (1 !== preg_match('~publicKey: "([^"]+)"~', $out, $match)) {
+            self::fail('no public key printed');
+        }
         $old = $match[1];
 
         [$code, , $err] = $this->bin('key generate '.escapeshellarg($this->dir.'/repository/old.key'));
@@ -229,9 +252,16 @@ class LicensingTest extends TestCase
         // The rotation, to the new public key or from its private key file: the same section, which hub.yaml's check accepts.
         [$code, $out, $err] = $this->bin('key rotate '.escapeshellarg($this->dir.'/repository/old.key').' '.escapeshellarg($new));
         self::assertSame(0, $code, $err);
-        self::assertSame(1, preg_match('~licensing:\n  publicKey: "([^"]+)"\n  previousKey: "([^"]+)"\n  rotation: "([^"]+)"~', $out, $section));
+        if (1 !== preg_match('~licensing:\n  publicKey: "([^"]+)"\n  previousKey: "([^"]+)"\n  rotation: "([^"]+)"\n  previousKeyValidUntil: (\d+)   # (\d{4}-\d\d-\d\d)\n~', $out, $section)) {
+            self::fail('no licensing section printed: '.$out);
+        }
         self::assertSame([$new, $old], [$section[1], $section[2]]);
-        self::assertSame(['publicKey' => $new, 'previousKey' => $old, 'rotation' => $section[3]], self::manifest(['licensing' => ['publicKey' => $section[1], 'previousKey' => $section[2], 'rotation' => $section[3]]])['licensing']);
+        self::assertEqualsWithDelta(time() + 30 * 86400, (int) $section[4], 60, 'previousKeyValidUntil: 30 days from now by default');
+        self::assertSame(gmdate('Y-m-d', (int) $section[4]), $section[5]);
+        self::assertStringContainsString('omnihub licence resign', $out, 'what to do with the licences the old key signed');
+        self::assertSame(['publicKey' => $new, 'registry' => self::URL, 'previousKey' => $old, 'rotation' => $section[3], 'previousKeyValidUntil' => (int) $section[4]], self::manifest(['licensing' => ['publicKey' => $section[1], 'previousKey' => $section[2], 'rotation' => $section[3], 'previousKeyValidUntil' => (int) $section[4]]])['licensing']);
+        [, $dated] = $this->bin('key rotate '.escapeshellarg($this->dir.'/repository/old.key').' '.escapeshellarg($new).' --previous-until 2026-12-31');
+        self::assertStringContainsString('previousKeyValidUntil: 1798675200   # 2026-12-31', $dated);
         [, $again] = $this->bin('key rotate '.escapeshellarg($this->dir.'/repository/old.key').' '.escapeshellarg($this->dir.'/new.key'));
         self::assertStringContainsString($section[3], $again, 'Ed25519 is deterministic');
 
@@ -239,10 +269,11 @@ class LicensingTest extends TestCase
         self::assertSame(1, $code);
         self::assertStringContainsString('32 bytes in base64', $err);
 
-        // A licence signed offline, its payload on stdin.
-        [$code, $token, $err] = $this->bin('licence sign '.escapeshellarg($this->dir.'/new.key').' -', '{"v": 1, "software": "com.acme.tool", "email": "ada@example.org"}');
+        // A licence signed offline, its payload on stdin (a format 1 payload of before: made format 2, its registry given).
+        [$code, $token, $err] = $this->bin('licence sign '.escapeshellarg($this->dir.'/new.key').' - --registry '.self::URL.'/ --licensee Ada', '{"v": 1, "software": "com.acme.tool", "email": "ada@example.org"}');
         self::assertSame(0, $code, $err);
-        self::assertSame('ada@example.org', SigningKey::verifyToken(trim($token), $new)['email'] ?? null);
+        self::assertSame(['v' => 2, 'software' => 'com.acme.tool', 'registry' => self::URL, 'licensee' => 'Ada', 'email' => 'ada@example.org'], array_diff_key(SigningKey::verifyToken(trim($token), $new) ?? [], ['issued_at' => 1]));
+        self::assertStringContainsString('becomes 2', $err);
         [$code, , $err] = $this->bin('licence sign '.escapeshellarg($this->dir.'/new.key').' -', '[1, 2]');
         self::assertSame(1, $code);
         self::assertStringContainsString('a JSON object', $err);
@@ -261,7 +292,9 @@ class LicensingTest extends TestCase
 
         [$code, , $err] = $this->bin('build '.escapeshellarg($this->dir.'/hub.json').' '.escapeshellarg($this->dir.'/_site').' --url='.self::URL);
         self::assertSame(0, $code, $err);
-        self::assertSame(['publicKey' => self::NEW, 'previousKey' => self::OLD, 'rotation' => self::ROTATION], json_decode((string) file_get_contents($this->dir.'/_site/-/hub.json'), true)['licensing']);
+        $manifest = json_decode((string) file_get_contents($this->dir.'/_site/-/hub.json'), true);
+        self::assertIsArray($manifest);
+        self::assertSame(['publicKey' => self::NEW, 'registry' => self::URL, 'previousKey' => self::OLD, 'rotation' => self::ROTATION], $manifest['licensing']);
 
         file_put_contents($this->dir.'/bad.json', json_encode(['name' => 'Acme', 'licensing' => ['publicKey' => self::OTHER, 'previousKey' => self::OLD, 'rotation' => self::ROTATION]]));
         [$code, , $err] = $this->bin('build '.escapeshellarg($this->dir.'/bad.json').' '.escapeshellarg($this->dir.'/_bad').' --url='.self::URL);

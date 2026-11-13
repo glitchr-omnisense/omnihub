@@ -26,6 +26,7 @@ final class StaticHub
      * @param string       $url     where it is published: https://<owner>.github.io/<repository>
      * @param list<string> $scopes  the scopes of its packages (their first two name segments when empty)
      * @param list<Source> $sources other sources its manifest lists
+     * @param list<array{package: string, get?: string}> $licensed the packages sold with a licence its author signs offline, and where to get one
      */
     public function __construct(
         public readonly string $url,
@@ -36,7 +37,24 @@ final class StaticHub
         public readonly ?string $color = null,
         public readonly ?Theme $theme = null,
         public readonly ?Licensing $licensing = null,
+        public readonly array $licensed = [],
     ) {
+    }
+
+    /**
+     * Its own registry: the address of its first source in the manifest, Forge Store's scoped
+     * registry url, the "registry" its manifest's licensing and its licences name - one function,
+     * so the three never differ.
+     */
+    public function registry(): string
+    {
+        return self::registryOf($this->url);
+    }
+
+    /** The registry of a static hub published at $url. */
+    public static function registryOf(string $url): string
+    {
+        return OfflineLicence::normalizeRegistry($url);
     }
 
     /** @param iterable<Package> $packages */
@@ -67,7 +85,7 @@ final class StaticHub
             }
             $scopes = array_values(array_unique($scopes));
         }
-        $base = rtrim($this->url, '/');
+        $base = $this->registry();
         // A picture kept in the hub's repository is published with it: its address is the hub's.
         $address = fn (string $picture) => preg_match('~^https?://~', $picture) ? $picture : $base.'/'.ltrim($picture, '/');
 
@@ -77,7 +95,8 @@ final class StaticHub
             $this->logo ? $address($this->logo) : null,
             $this->color,
             theme: $this->theme?->withPictures($address),
-            licensing: $this->licensing,
+            licensing: $this->licensing?->withRegistry($base),
+            licensed: $this->licensing ? $this->licensed : [],
         );
     }
 
@@ -108,9 +127,12 @@ final class StaticHub
         $banner = \is_array($manifest['theme'] ?? null) ? $text($manifest['theme']['banner'] ?? null) : null;
         $logo = $text($manifest['logo'] ?? null);
         $rows = '';
+        $licensed = array_column($hub->licensed, null, 'package');
         foreach ($this->packages as $package) {
             $latest = $package->latest();
-            $rows .= '<tr><td><code>'.$e($package->name).'</code></td><td>'.$e($text($package->field('displayName', ''))).'</td><td>'.$e($latest?->version).'</td><td>'.$e($text($package->field('description', ''))).'</td></tr>';
+            $sold = $licensed[$package->name] ?? null;
+            $rows .= '<tr><td><code>'.$e($package->name).'</code></td><td>'.$e($text($package->field('displayName', ''))).'</td><td>'.$e($latest?->version).'</td><td>'.$e($text($package->field('description', '')))
+                .(null === $sold ? '' : ' <em>'.(isset($sold['get']) ? '<a href="'.$e($sold['get']).'">Licensed: get a licence</a>' : 'Licensed').'</em>').'</td></tr>';
         }
         $scoped = (string) json_encode(['scopedRegistries' => [['name' => $this->name, 'url' => $registry->url, 'scopes' => $registry->scopes]]], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES);
         $color = $this->theme?->color() ?? $this->color ?? '#222222';

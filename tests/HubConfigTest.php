@@ -70,7 +70,7 @@ class HubConfigTest extends TestCase
             self::fail('A wrong configuration is refused.');
         } catch (InvalidHubConfig $e) {
             self::assertSame([
-                'colour: not a key of a hub (name, url, scopes, logo, color, theme, licensing, packages, sources, copy).',
+                'colour: not a key of a hub (name, url, scopes, logo, color, theme, licensing, licensed, packages, sources, copy).',
                 'url: the hub\'s address, https://<owner>.github.io/<repository> - in the configuration or --url.',
                 'scopes[0]: a scope is reverse-domain, "com.mystudio", not "Com Acme".',
                 'color: a text, not int.',

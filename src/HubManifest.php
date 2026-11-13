@@ -5,7 +5,8 @@ namespace Omnihub;
 /**
  * The hub manifest the hub clients read first - Forge Store, the Unity window (io.glitchr.store),
  * Forge Hub, the desktop app: the hub's name, logo and colour, its theme, its sources, where its
- * games are, the public key its licences are signed with (licensing), and, only for a hub that
+ * games are, the public key its licences are signed with and the registry they name (licensing),
+ * the packages a static hub sells with a licence its author signs (licensed), and, only for a hub that
  * sells through a server, its checkout (a device flow). A static hub never declares a checkout; it
  * may declare a licensing key, its author signing the licences offline.
  */
@@ -16,6 +17,7 @@ final class HubManifest
     /**
      * @param list<Source>                             $sources
      * @param array{device: string, token: string}|null $checkout
+     * @param list<array{package: string, get?: string}> $licensed packages sold with a licence signed offline (a static hub), and where to get one
      */
     public function __construct(
         public readonly string $name,
@@ -26,6 +28,7 @@ final class HubManifest
         public readonly ?array $checkout = null,
         public readonly ?Theme $theme = null,
         public readonly ?Licensing $licensing = null,
+        public readonly array $licensed = [],
     ) {
         if (null !== $color && !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
             throw new \InvalidArgumentException(\sprintf('color: a colour is #rrggbb, not "%s".', $color));
@@ -50,6 +53,7 @@ final class HubManifest
             'color' => $this->color ?? $theme?->color(),
             'theme' => $theme?->toArray(),
             'licensing' => $this->licensing?->toArray(),
+            'licensed' => $this->licensed ?: null,
             'sources' => array_map(fn (Source $source) => $source->toArray(), $this->sources),
             'games' => $this->games,
             'checkout' => $this->checkout,

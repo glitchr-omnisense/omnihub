@@ -9,10 +9,18 @@
  * omnihub key generate <private-key-file>            a new Ed25519 pair: the private key written to that file
  *                                                    only (0600, never over a file), the public key printed
  * omnihub key public <private-key-file>              the public key of a private key: hub.yaml's licensing
- * omnihub key rotate <old-private-key-file> <new-public-key|new-private-key-file>
+ * omnihub key rotate <old-private-key-file> <new-public-key|new-private-key-file> [--previous-until <day|unix>]
  *                                                    the licensing section that hands the hub over to a new key
- * omnihub licence sign <private-key-file> <payload.json|->
- *                                                    a licence token signed offline, in Forge Seal's form
+ * omnihub licence sign <private-key-file> [payload.json|-] --package <upm-name>|--software <slug>
+ *                      --licensee <text> [--hub <hub.yaml>|--registry <url>] [--valid-until <day|unix>|--days <n>]
+ *                      [--updates-until <day|unix>] [--machine <identifier>|--machine-hash <hex>]
+ *                      [--log <file.jsonl> [--log-token]]
+ *                                                    an offline licence (format 2), the token alone on stdout
+ * omnihub licence verify <public-key|hub.yaml|hub.json> <token|-> [--registry <url>] [--package <name>]
+ *                      [--software <slug>] [--machine <identifier>|--machine-hash <hex>] [--at <day|unix>]
+ *                                                    what Forge Store would say of a token; exit 1 when it refuses it
+ * omnihub licence resign <new-private-key-file> <log.jsonl> [--hub <hub.yaml>] [--log <file.jsonl>]
+ *                                                    every logged licence signed again with a new key, after a rotation
  *
  * The private key lives on the author's machine, outside the hub's repository: nothing here prints
  * it, and the build refuses to publish a file that holds one.
@@ -44,11 +52,28 @@ foreach (array_filter([$GLOBALS['_composer_autoload_path'] ?? null, __DIR__.'/..
 use Omnihub\Bridge\Static\HubSite;
 use Omnihub\HubConfig;
 use Omnihub\InvalidHubConfig;
+use Omnihub\LicenceCheck;
+use Omnihub\LicenceLog;
+use Omnihub\Licensing;
+use Omnihub\OfflineLicence;
 use Omnihub\SigningKey;
 use Omnihub\Source;
 use Omnihub\TarballSource;
 
-const OMNIHUB_KEY_USAGE = "omnihub key generate <private-key-file>\nomnihub key public <private-key-file>\nomnihub key rotate <old-private-key-file> <new-public-key|new-private-key-file>\nomnihub licence sign <private-key-file> <payload.json|->\n";
+const OMNIHUB_KEY_USAGE = <<<'USAGE'
+    omnihub key generate <private-key-file>
+    omnihub key public <private-key-file>
+    omnihub key rotate <old-private-key-file> <new-public-key|new-private-key-file> [--previous-until <YYYY-MM-DD|unix>]
+    omnihub licence sign <private-key-file> [payload.json|-] (--package <upm-name> | --software <slug>) --licensee <text>
+        [--hub <hub.yaml> | --registry <https://...>] [--valid-until <YYYY-MM-DD|unix> | --days <n>]
+        [--updates-until <YYYY-MM-DD|unix>] [--machine <identifier> | --machine-hash <64 hex>]
+        [--issued-at <YYYY-MM-DD|unix>] [--log <file.jsonl> [--log-token]]
+    omnihub licence verify <public-key|hub.yaml|hub.json> <token|-> [--registry <url>] [--package <upm-name>]
+        [--software <slug>] [--machine <identifier> | --machine-hash <64 hex>] [--at <YYYY-MM-DD|unix>]
+    omnihub licence verify <token|-> (--hub <hub.yaml|hub.json> | --key <public-key>) [...]
+    omnihub licence resign <new-private-key-file> <log.jsonl> [--hub <hub.yaml> | --registry <url>] [--log <file.jsonl> [--log-token]]
+
+    USAGE;
 
 $args = array_slice($argv, 1);
 $options = [];
@@ -62,7 +87,8 @@ foreach ($args as $i => $arg) {
 [$command, $config, $out] = array_values($args) + [null, null, null];
 
 if ('key' === $command || 'licence' === $command || 'license' === $command) {
-    exit(omnihub_keys(array_values($args), $options));
+    // Their flags take a value after a space too (--hub hub.yaml): read again from the command line.
+    exit(omnihub_keys(array_slice($argv, 1)));
 }
 if (!('build' === $command && $config && $out) && !('check' === $command && $config)) {
     fwrite(STDERR, "omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository] [--strict] [--resolve-github [--github-cache=<file>]]\nomnihub check <hub.yaml|hub.json> [--url=...]\n".OMNIHUB_KEY_USAGE);
@@ -180,14 +206,46 @@ if (class_exists(\Omnibridge\Static\Exporter::class)) {
 // the build (the hub is written anyway).
 exit($failures && isset($options['strict']) ? 1 : 0);
 
+
 /**
- * omnihub key ... / omnihub licence sign: the author's keys, on the author's machine.
+ * omnihub key ... / omnihub licence ...: the author's keys and licences, on the author's machine.
+ * Nothing here prints a private key.
  *
- * @param list<string>               $args
- * @param array<string, string|true> $options
+ * @param list<string> $argv the command line after the program
  */
-function omnihub_keys(array $args, array $options): int
+function omnihub_keys(array $argv): int
 {
+    $values = ['hub', 'url', 'registry', 'package', 'software', 'licensee', 'valid-until', 'days', 'updates-until', 'machine', 'machine-hash', 'issued-at', 'log', 'key', 'at', 'previous-until'];
+    $args = [];
+    $options = [];
+    for ($i = 0; $i < count($argv); ++$i) {
+        $arg = $argv[$i];
+        if (!str_starts_with($arg, '--')) {
+            $args[] = $arg;
+            continue;
+        }
+        [$name, $value] = array_pad(explode('=', substr($arg, 2), 2), 2, null);
+        if (in_array($name, $values, true)) {
+            if (null === $value) {
+                if (!isset($argv[$i + 1])) {
+                    fwrite(STDERR, sprintf("--%s: a value.\n", $name));
+
+                    return 2;
+                }
+                $value = $argv[++$i];
+            }
+            $options[$name] = $value;
+        } elseif ('log-token' === $name && null === $value) {
+            $options[$name] = true;
+        } else {
+            // A misspelt flag would sign something else than meant: refused.
+            fwrite(STDERR, sprintf("--%s: not a flag of these commands.\n%s", $name, OMNIHUB_KEY_USAGE));
+
+            return 2;
+        }
+    }
+    $text = fn (string $name): ?string => is_string($options[$name] ?? null) ? $options[$name] : null;
+
     [$command, $action, $first, $second] = $args + [null, null, null, null];
     $section = fn (string $yaml) => fwrite(STDOUT, "\nIn hub.yaml:\n\n".$yaml."\n");
     try {
@@ -216,30 +274,37 @@ function omnihub_keys(array $args, array $options): int
                 if (!$first || !$second) {
                     break;
                 }
+                $until = null !== $text('previous-until') ? OfflineLicence::time((string) $text('previous-until'), '--previous-until') : time() + 30 * 86400;
                 $new = is_file($second) ? SigningKey::fromFile($second)->publicKey() : $second;
-                $licensing = SigningKey::fromFile($first)->rotateTo($new);
+                $licensing = SigningKey::fromFile($first)->rotateTo($new, $until);
                 fwrite(STDOUT, "The old key hands the hub over to the new one: Forge Store moves its users' pin without asking them.\nKeep signing licences with the new private key from now on.\n");
-                $section(sprintf("licensing:\n  publicKey: \"%s\"\n  previousKey: \"%s\"\n  rotation: \"%s\"\n", $licensing->publicKey, $licensing->previousKey, $licensing->rotation));
+                fwrite(STDOUT, sprintf("Licences the old key signed keep opening in Forge Store until %s at the latest, and no longer than 30 days after a user sees the rotation - those without an end too: sign them again with the new key (omnihub licence resign <new key> <your --log file>) and send them to their buyers.\n", OfflineLicence::day($until)));
+                $section(sprintf("licensing:\n  publicKey: \"%s\"\n  previousKey: \"%s\"\n  rotation: \"%s\"\n  previousKeyValidUntil: %d   # %s\n", $licensing->publicKey, $licensing->previousKey, $licensing->rotation, $until, OfflineLicence::day($until)));
 
                 return 0;
             case 'licence sign':
             case 'license sign':
+                if (!$first) {
+                    break;
+                }
+
+                return omnihub_licence_sign($first, $second, $options);
+            case 'licence verify':
+            case 'license verify':
+                if (!$first) {
+                    break;
+                }
+
+                return omnihub_licence_verify($first, $second, $options);
+            case 'licence resign':
+            case 'license resign':
                 if (!$first || !$second) {
                     break;
                 }
-                $json = '-' === $second ? stream_get_contents(STDIN) : @file_get_contents($second);
-                if (false === $json) {
-                    throw new RuntimeException(sprintf('%s: cannot be read.', $second));
-                }
-                $payload = json_decode((string) $json, true);
-                if (!is_array($payload) || array_is_list($payload)) {
-                    throw new RuntimeException(sprintf('%s: the licence\'s payload, a JSON object.', $second));
-                }
-                fwrite(STDOUT, SigningKey::fromFile($first)->signToken($payload)."\n");
 
-                return 0;
+                return omnihub_licence_resign($first, $second, $options);
         }
-    } catch (RuntimeException|InvalidArgumentException $e) {
+    } catch (RuntimeException|InvalidArgumentException|InvalidHubConfig $e) {
         fwrite(STDERR, $e->getMessage()."\n");
 
         return 1;
@@ -247,4 +312,352 @@ function omnihub_keys(array $args, array $options): int
     fwrite(STDERR, OMNIHUB_KEY_USAGE);
 
     return 2;
+}
+
+/**
+ * The hub a licence is signed for: --hub, else ./hub.yaml when there is one and no --registry -
+ * its registry, and its key checked against the private key. Null without a hub.
+ *
+ * @param array<string, string|true> $options
+ *
+ * @return array{0: HubConfig, 1: string}|null [the hub, its path]
+ */
+function omnihub_licence_hub(array $options, ?SigningKey $key): ?array
+{
+    $path = is_string($options['hub'] ?? null) ? $options['hub'] : (!isset($options['registry']) && is_file('hub.yaml') ? 'hub.yaml' : null);
+    if (null === $path) {
+        return null;
+    }
+    $hub = HubConfig::fromFile($path, is_string($options['url'] ?? null) ? $options['url'] : null);
+    if (null === $hub->licensing) {
+        throw new RuntimeException(sprintf('%s declares no licensing key: Forge Store would have nothing to check a licence with (omnihub key generate, then licensing.publicKey).', $path));
+    }
+    if (null !== $key && $key->publicKey() !== $hub->licensing->publicKey) {
+        throw new RuntimeException(sprintf('this key does not sign for this hub: %s vs %s (%s\'s licensing.publicKey)%s.', $key->fingerprint(), $hub->licensing->fingerprint(), $path, $key->publicKey() === $hub->licensing->previousKey ? ' - it is the hub\'s previous key: sign with the new one' : ''));
+    }
+
+    return [$hub, $path];
+}
+
+/**
+ * The machine flags: --machine hashed here (never written in clear), --machine-hash as given.
+ *
+ * @param array<string, string|true> $options
+ * @param list<string>               $problems
+ */
+function omnihub_licence_machine(array $options, array &$problems): ?string
+{
+    $machine = is_string($options['machine'] ?? null) ? $options['machine'] : null;
+    $hash = is_string($options['machine-hash'] ?? null) ? $options['machine-hash'] : null;
+    if (null !== $machine && null !== $hash) {
+        $problems[] = '--machine, --machine-hash: one or the other.';
+
+        return null;
+    }
+    if (null !== $machine) {
+        if (1 !== preg_match('//u', $machine) || '' === trim($machine)) {
+            $problems[] = '--machine: the machine\'s identifier as the buyer\'s Unity reports it (SystemInfo.deviceUniqueIdentifier), UTF-8, not empty.';
+
+            return null;
+        }
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', trim($machine))) {
+            fwrite(STDERR, "Note: --machine is hashed exactly as given; on macOS Unity reports the identifier in uppercase.\n");
+        }
+
+        return OfflineLicence::machineHash($machine);
+    }
+    if (null !== $hash) {
+        $hash = strtolower(trim($hash));
+        if (!preg_match('/^[0-9a-f]{64}$/', $hash)) {
+            $problems[] = '--machine-hash: the 64 hex digits of the machine\'s SHA-256, as the buyer sent them.';
+
+            return null;
+        }
+
+        return $hash;
+    }
+
+    return null;
+}
+
+/** @param array<string, string|true> $options */
+function omnihub_licence_sign(string $keyFile, ?string $payloadFile, array $options): int
+{
+    $text = fn (string $name): ?string => is_string($options[$name] ?? null) ? $options[$name] : null;
+    $key = SigningKey::fromFile($keyFile);
+    $now = time();
+    $fields = [];
+    if (null !== $payloadFile) {
+        $json = '-' === $payloadFile ? stream_get_contents(STDIN) : @file_get_contents($payloadFile);
+        if (false === $json) {
+            throw new RuntimeException(sprintf('%s: cannot be read.', $payloadFile));
+        }
+        $fields = json_decode((string) $json, true);
+        if (!is_array($fields) || array_is_list($fields)) {
+            throw new RuntimeException(sprintf('%s: the licence\'s payload, a JSON object.', $payloadFile));
+        }
+        if (isset($fields['v']) && OfflineLicence::VERSION !== $fields['v']) {
+            fwrite(STDERR, sprintf("Note: the payload's v (%s) becomes 2, the format bound to its store.\n", json_encode($fields['v'])));
+        }
+    }
+
+    $problems = [];
+    [$hub, $hubPath] = omnihub_licence_hub($options, $key) ?? [null, null];
+    if (null !== $text('registry')) {
+        $registry = OfflineLicence::normalizeRegistry((string) $text('registry'));
+        if (null !== $hub && !OfflineLicence::sameRegistry($registry, $hub->registry())) {
+            $problems[] = sprintf('--registry: %s is not the registry of %s, %s.', $registry, $hubPath, $hub->registry());
+        }
+        $fields['registry'] = $registry;
+    }
+    if (null !== $hub) {
+        if (is_string($fields['registry'] ?? null) && !OfflineLicence::sameRegistry($fields['registry'], $hub->registry())) {
+            $problems[] = sprintf('registry: the payload names %s, and %s\'s registry is %s.', $fields['registry'], $hubPath, $hub->registry());
+        }
+        $fields['registry'] = $hub->registry();
+    }
+    if (null !== $text('package') && null !== $text('software')) {
+        $problems[] = '--package, --software: a package\'s licence or a game\'s, not both.';
+    } elseif (null !== $text('package')) {
+        $fields['package'] = $text('package');
+        unset($fields['software']);
+    } elseif (null !== $text('software')) {
+        $fields['software'] = $text('software');
+        unset($fields['package']);
+    }
+    if (null !== $text('licensee')) {
+        $fields['licensee'] = $text('licensee');
+    }
+    if (null !== $text('issued-at')) {
+        $fields['issued_at'] = OfflineLicence::time((string) $text('issued-at'), '--issued-at');
+    }
+    $issued = is_int($fields['issued_at'] ?? null) ? $fields['issued_at'] : $now;
+    if (null !== $text('valid-until') && null !== $text('days')) {
+        $problems[] = '--valid-until, --days: one or the other.';
+    } elseif (null !== $text('valid-until')) {
+        $fields['valid_until'] = OfflineLicence::time((string) $text('valid-until'), '--valid-until');
+    } elseif (null !== $text('days')) {
+        if (!preg_match('/^[1-9]\d{0,5}$/', (string) $text('days'))) {
+            $problems[] = sprintf('--days: a number of days, 1 or more, not "%s".', $text('days'));
+        } else {
+            $fields['valid_until'] = $issued + (int) $text('days') * 86400;
+        }
+    }
+    if (null !== $text('updates-until')) {
+        $fields['updates_until'] = OfflineLicence::time((string) $text('updates-until'), '--updates-until');
+    }
+    if (null !== ($machine = omnihub_licence_machine($options, $problems))) {
+        $fields['machine'] = $machine;
+    }
+    try {
+        $payload = OfflineLicence::payload($fields, $now);
+    } catch (InvalidArgumentException $e) {
+        array_push($problems, ...explode("\n", $e->getMessage()));
+    }
+    if ($problems || !isset($payload)) {
+        fwrite(STDERR, implode("\n", $problems)."\n");
+
+        return 1;
+    }
+
+    // What the hub says of the package: a licence for a package it does not serve opens nowhere.
+    $package = is_string($payload['package'] ?? null) ? $payload['package'] : null;
+    if (null !== $hub && null !== $package) {
+        if ($hub->scopes && !array_filter($hub->scopes, fn (string $scope) => $package === $scope || str_starts_with($package, $scope.'.'))) {
+            fwrite(STDERR, sprintf("Warning: %s is under none of %s's scopes (%s): Unity would not install it from this registry, and Forge Store opens a licence only for a package installed from the registry it names.\n", $package, $hubPath, implode(', ', $hub->scopes)));
+        }
+        foreach ($hub->sources as $source) {
+            if (Source::GIT === $source->type && $source->package === $package) {
+                fwrite(STDERR, sprintf("Warning: %s lists %s as a git source: installed from Git, it comes from no registry, and Forge Store refuses its licence.\n", $hubPath, $package));
+            }
+        }
+        if ($hub->licensed && !in_array($package, array_column($hub->licensed, 'package'), true)) {
+            fwrite(STDERR, sprintf("Warning: %s's licensed list does not name %s.\n", $hubPath, $package));
+        }
+    }
+
+    $token = $key->signToken($payload);
+    $check = LicenceCheck::verify($token, new Licensing($key->publicKey()), $payload['registry'], $package, $machine, $now, is_string($payload['software'] ?? null) ? $payload['software'] : null);
+    if (!$check->opens() && !str_contains((string) $check->refusal, 'ran out')) {
+        throw new LogicException('The licence signed does not pass the clients\' check: '.$check->refusal);
+    }
+    if (null !== ($log = $text('log'))) {
+        (new LicenceLog($log))->append($payload, $key->fingerprint(), isset($options['log-token']) ? $token : null, $now);
+        if ($tree = SigningKey::gitWorkTree($log)) {
+            fwrite(STDERR, sprintf("Warning: %s is inside the git work tree %s - it names your buyers: keep it out of the hub's repository.\n", $log, $tree));
+        }
+    }
+
+    fwrite(STDOUT, $token."\n");
+    fwrite(STDERR, omnihub_licence_summary($payload, $key->fingerprint())
+        .(null !== $log ? sprintf("  logged to %s%s\n", $log, isset($options['log-token']) ? ' (with its token)' : '') : '')
+        .($check->opens() ? '' : '  Warning: '.$check->refusal."\n"));
+
+    return 0;
+}
+
+/** @param array<array-key, mixed> $payload */
+function omnihub_licence_summary(array $payload, ?string $fingerprint): string
+{
+    $field = fn (string $name): string => is_scalar($payload[$name] ?? null) ? (string) $payload[$name] : '';
+    $time = fn (string $name): int => LicenceCheck::number($payload, $name);
+    $what = '' !== $field('package') ? 'package '.$field('package') : ('' !== $field('software') ? 'software '.$field('software') : 'no package');
+
+    return sprintf("Licence (format %d) for %s, from %s, licensed to %s.\n", $time('v'), $what, '' !== $field('registry') ? $field('registry') : 'no registry', '' !== $field('licensee') ? $field('licensee') : ($field('email') ?: 'nobody named'))
+        .sprintf("  issued:   %s\n", $time('issued_at') ? OfflineLicence::day($time('issued_at')) : '-')
+        .sprintf("  validity: %s\n", $time('valid_until') ? 'until '.OfflineLicence::day($time('valid_until')) : ($time('v') >= 2 ? 'no end' : '-'))
+        .sprintf("  updates:  %s\n", $time('updates_until') ? 'until '.OfflineLicence::day($time('updates_until')) : 'every release')
+        .sprintf("  machine:  %s\n", '' !== $field('machine') ? 'one machine ('.substr($field('machine'), 0, 12).'...)' : 'any machine')
+        .(null !== $fingerprint ? sprintf("  key:      %s\n", $fingerprint) : '');
+}
+
+/**
+ * The keys and the registry to check a token against: a hub's configuration (hub.yaml, or its
+ * JSON), a published hub manifest (hub.json, "version" and "sources"), or a public key.
+ *
+ * @param array<string, string|true> $options
+ *
+ * @return array{0: Licensing, 1: ?string, 2: string} [the keys, the registry, what they came from]
+ */
+function omnihub_licence_keys(string $source, array $options): array
+{
+    if (is_file($source)) {
+        $content = (string) file_get_contents($source);
+        if (SigningKey::looksLikePrivateKey($content)) {
+            throw new InvalidArgumentException(sprintf('%s holds a private key: verify takes the public key (omnihub key public %s) or the hub.', $source, $source));
+        }
+        $json = json_decode($content, true);
+        if (is_array($json) && isset($json['version'], $json['sources']) && is_array($json['sources'])) {
+            if (!isset($json['licensing'])) {
+                throw new InvalidArgumentException(sprintf('%s: a hub manifest without licensing - this hub signs no licences.', $source));
+            }
+            $licensing = Licensing::fromArray($json['licensing']);
+            $first = $json['sources'][0] ?? null;
+
+            return [$licensing, $licensing->registry ?? (is_array($first) && is_string($first['url'] ?? null) ? OfflineLicence::normalizeRegistry($first['url']) : null), $source.' (hub manifest)'];
+        }
+        if (is_array($json) || preg_match('/\.ya?ml$/i', $source)) {
+            $hub = HubConfig::fromFile($source, is_string($options['url'] ?? null) ? $options['url'] : null);
+            if (null === $hub->licensing) {
+                throw new InvalidArgumentException(sprintf('%s declares no licensing key.', $source));
+            }
+
+            return [$hub->licensing, $hub->registry(), $source];
+        }
+        $source = trim($content);
+    }
+    if (SigningKey::looksLikePrivateKey($source)) {
+        throw new InvalidArgumentException('that is a private key: verify takes the public key (omnihub key public <private-key-file>) or the hub.');
+    }
+
+    return [new Licensing(trim($source)), null, 'the key given'];
+}
+
+/** @param array<string, string|true> $options */
+function omnihub_licence_verify(string $first, ?string $second, array $options): int
+{
+    $text = fn (string $name): ?string => is_string($options[$name] ?? null) ? $options[$name] : null;
+    if (null !== $text('hub') || null !== $text('key')) {
+        [$source, $token] = [(string) ($text('hub') ?? $text('key')), $first];
+    } elseif (null !== $second) {
+        [$source, $token] = [$first, $second];
+    } else {
+        fwrite(STDERR, OMNIHUB_KEY_USAGE);
+
+        return 2;
+    }
+    try {
+        [$keys, $registry, $from] = omnihub_licence_keys($source, $options);
+    } catch (InvalidArgumentException|InvalidHubConfig $e) {
+        fwrite(STDERR, $e->getMessage()."\n");
+
+        return 2;
+    }
+    if ('-' === $token) {
+        $token = (string) stream_get_contents(STDIN);
+    }
+    if (null !== $text('registry')) {
+        $registry = OfflineLicence::normalizeRegistry((string) $text('registry'));
+    }
+    $problems = [];
+    $machine = omnihub_licence_machine($options, $problems);
+    if ($problems) {
+        fwrite(STDERR, implode("\n", $problems)."\n");
+
+        return 2;
+    }
+    $at = null !== $text('at') ? OfflineLicence::time((string) $text('at'), '--at') : time();
+
+    $check = LicenceCheck::verify($token, $keys, $registry, $text('package'), $machine, $at, $text('software'));
+    if (null !== $check->payload) {
+        fwrite(STDOUT, omnihub_licence_summary($check->payload, null));
+        fwrite(STDOUT, sprintf("  checked:  with %s's key %s%s%s, on %s\n", $from, $keys->fingerprint(), null !== $registry ? ', registry '.$registry : '', null !== $machine ? ', machine '.substr($machine, 0, 12).'...' : '', OfflineLicence::day($at)));
+    }
+    foreach ($check->notes as $note) {
+        fwrite(STDOUT, '  note:     '.$note."\n");
+    }
+    if ($check->opens()) {
+        fwrite(STDOUT, "Forge Store opens it.\n");
+
+        return 0;
+    }
+    fwrite(STDOUT, 'Forge Store refuses it: '.$check->refusal."\n");
+
+    return 1;
+}
+
+/**
+ * Every licence of a log signed again with the new key (after omnihub key rotate): one line per
+ * licence on stdout, "licensee<TAB>package<TAB>token", for the seller to send each to its buyer.
+ * Those the new key already signed, and those that ran out, are left; each payload stays as sold.
+ *
+ * @param array<string, string|true> $options
+ */
+function omnihub_licence_resign(string $keyFile, string $logFile, array $options): int
+{
+    $key = SigningKey::fromFile($keyFile);
+    $hub = omnihub_licence_hub($options, $key)[0] ?? null;
+    $registry = null !== $hub ? $hub->registry() : (is_string($options['registry'] ?? null) ? OfflineLicence::normalizeRegistry($options['registry']) : null);
+    $entries = (new LicenceLog($logFile))->entries();
+    $now = time();
+    $done = [];
+    foreach ($entries as [, $entry]) {
+        if (($entry['key'] ?? null) === $key->fingerprint()) {
+            $done[OfflineLicence::json($entry['payload'])] = true;
+        }
+    }
+    $out = null !== ($log = is_string($options['log'] ?? null) ? $options['log'] : null) ? new LicenceLog($log) : null;
+    $signed = 0;
+    $failed = 0;
+    foreach ($entries as [$line, $entry]) {
+        $payload = $entry['payload'];
+        $json = OfflineLicence::json($payload);
+        $where = sprintf('%s:%d', $logFile, $line);
+        if (isset($done[$json])) {
+            continue;
+        }
+        $done[$json] = true;
+        if ($problems = OfflineLicence::problems($payload)) {
+            fwrite(STDERR, sprintf("%s: left - %s\n", $where, $problems[0]));
+            ++$failed;
+            continue;
+        }
+        if (null !== $registry && !OfflineLicence::sameRegistry(is_string($payload['registry']) ? $payload['registry'] : null, $registry)) {
+            fwrite(STDERR, sprintf("%s: left - another hub's licence (%s).\n", $where, is_string($payload['registry']) ? $payload['registry'] : '?'));
+            continue;
+        }
+        $until = LicenceCheck::number($payload, 'valid_until');
+        if (0 !== $until && $until <= $now) {
+            fwrite(STDERR, sprintf("%s: left - it ran out on %s.\n", $where, OfflineLicence::day($until)));
+            continue;
+        }
+        /** @var array<string, mixed> $payload */
+        $token = $key->signToken($payload);
+        $out?->append($payload, $key->fingerprint(), isset($options['log-token']) ? $token : null, $now);
+        fwrite(STDOUT, sprintf("%s\t%s\t%s\n", is_string($payload['licensee'] ?? null) ? $payload['licensee'] : '', is_string($payload['package'] ?? null) ? $payload['package'] : (is_string($payload['software'] ?? null) ? $payload['software'] : ''), $token));
+        ++$signed;
+    }
+    fwrite(STDERR, sprintf("%d licence%s signed again with %s%s.\n", $signed, 1 === $signed ? '' : 's', $key->fingerprint(), null !== $out ? ', logged to '.$log : ''));
+
+    return $failed ? 1 : 0;
 }
