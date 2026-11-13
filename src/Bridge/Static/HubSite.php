@@ -13,6 +13,8 @@ use Omnihub\StaticHub;
  * A static hub as an omnibridge/static site: each of its files an address, exported to a folder
  * GitHub Pages serves (.nojekyll written) - with the files of the hub's repository published
  * beside them (its logo, its kept tarballs), so the export's link check finds them.
+ *
+ * @suggested omnibridge/static
  */
 final class HubSite
 {

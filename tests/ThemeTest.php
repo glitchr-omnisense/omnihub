@@ -11,6 +11,8 @@ use PHPUnit\Framework\TestCase;
 /** A hub's look in the manifest: "theme", as Forge Store reads it, and the older color and logo. */
 class ThemeTest extends TestCase
 {
+    use Reads;
+
     public function testTheManifestCarriesItsThemeAndTheOlderKeys(): void
     {
         $manifest = (new HubManifest('Acme', [], theme: new Theme('#369', '#6699cc', 'https://acme.example/logo.png', 'https://acme.example/banner.png')))->toArray();
@@ -27,8 +29,8 @@ class ThemeTest extends TestCase
     {
         $hub = new StaticHub('https://acme.github.io/hub/', 'Acme', ['com.acme'], [Source::github('acme', 'unity-*')], theme: new Theme('#336699', null, 'brand/logo.png', 'https://cdn.example/banner.png'));
         $manifest = json_decode($hub->files()['/-/hub.json'][1], true);
-        self::assertSame(['accent' => '#336699', 'logo' => 'https://acme.github.io/hub/brand/logo.png', 'banner' => 'https://cdn.example/banner.png'], $manifest['theme']);
-        self::assertSame(['type' => 'github', 'owner' => 'acme', 'pattern' => 'unity-*'], $manifest['sources'][1], 'passed through for the clients');
+        self::assertSame(['accent' => '#336699', 'logo' => 'https://acme.github.io/hub/brand/logo.png', 'banner' => 'https://cdn.example/banner.png'], self::at($manifest, 'theme'));
+        self::assertSame(['type' => 'github', 'owner' => 'acme', 'pattern' => 'unity-*'], self::at($manifest, 'sources', 1), 'passed through for the clients');
         self::assertStringContainsString('border-bottom:4px solid #336699', $hub->files()['/'][1]);
         self::assertStringContainsString('https://cdn.example/banner.png', $hub->files()['/'][1]);
     }
@@ -43,6 +45,7 @@ class ThemeTest extends TestCase
         yield 'a typo' => [['acent' => '#fff'], 'theme.acent: not a key of a theme'];
     }
 
+    /** @param array<string, mixed> $theme */
     #[\PHPUnit\Framework\Attributes\DataProvider('wrong')]
     public function testAWrongThemeSaysWhy(array $theme, string $message): void
     {

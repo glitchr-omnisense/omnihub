@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- On omnisense/contracts (`^1.0@dev`), the kernel of the omni families, and
+  `symfony/http-client-contracts`: every request through the kit's HTTP client
+  (`Omnihub\Http\JsonClient`, `Omnihub\Http\Downloader`) - sent once
+  (`Http\NoRetry`: no retry by the application's client), a timeout (30 s idle
+  for an API call, 60 s for a tarball), the User-Agent
+  `omnihub (+https://github.com/glitchr-omnisense/omnihub)`, a `429` and its
+  `Retry-After` holding that host's further requests, errors naming the path
+  only, without a token. `TarballSource` takes an HTTP client (or, as before, a
+  callable; PHP's streams without either); `bin/omnihub` gives it
+  symfony/http-client's when installed, and reads GitHub through one
+  `omnihub/github` Api for the whole build (its rate limit, ETags and usage
+  policy counting across `github:` entries and sources; `--github-cache` keeps
+  the releases' ETags too).
+- `Omnihub\Exception\`: `OmnihubException` (the kit's `ExceptionInterface`),
+  `ProviderException`, `UnreachableException`, `UsageLimitReachedException`
+  (the kit's `UsageLimitReached`).
+- `docker/`: the family's harness - the core, omnihub/github and
+  omnisense/contracts from their checkouts (or GitHub), `test`, `phpstan`,
+  `bare` and bin/omnihub's commands; no Docker network created.
+- PHPStan at level max on `src/` and `tests/` (it was level 8 on `src/`); the
+  baseline holds only the licensing key code's findings. `BareTest`: every
+  class loads with omnisense/contracts and the HTTP client contracts alone.
+- A package.json field that is neither text nor a number (an object as a
+  `displayName`, a list as a `name`) is left out of the hub's page and search,
+  or refused as a name, rather than cast to "Array".
+
 - `licensing` in `hub.yaml` and in the manifest (`Omnihub\Licensing`): the
   Ed25519 public key a hub's licences are signed with, and after a change of
   key the previous key with its rotation signature - written as Forge Store

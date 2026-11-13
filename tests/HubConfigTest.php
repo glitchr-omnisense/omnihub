@@ -11,6 +11,8 @@ use PHPUnit\Framework\TestCase;
 /** hub.yaml read and checked: the hub, its theme, its sources; every error at once, each naming its key. */
 class HubConfigTest extends TestCase
 {
+    use Reads;
+
     private string $dir;
 
     protected function setUp(): void
@@ -42,11 +44,11 @@ class HubConfigTest extends TestCase
         self::assertCount(1, $config->githubSources());
         $manifest = $config->hub()->manifest()->toArray();
         self::assertSame(['accent' => '#336699', 'accentDark' => '#6699cc', 'logo' => 'https://acme.github.io/hub/brand/logo.png'], $manifest['theme']);
-        self::assertSame(['name' => 'Acme on GitHub', 'type' => 'github', 'owner' => 'acme', 'pattern' => 'unity-*', 'install' => true], $manifest['sources'][1]);
-        self::assertSame('upm', $manifest['sources'][2]['type']);
+        self::assertSame(['name' => 'Acme on GitHub', 'type' => 'github', 'owner' => 'acme', 'pattern' => 'unity-*', 'install' => true], self::at($manifest, 'sources', 1));
+        self::assertSame('upm', self::at($manifest, 'sources', 2, 'type'));
 
         $resolved = $config->hub([new Source(Source::GIT, 'https://github.com/acme/unity-tool.git#v1.0.0', 'Tool', package: 'com.acme.tool')])->manifest()->toArray();
-        self::assertSame(['upm', 'git'], array_column($resolved['sources'], 'type'), 'the sources as resolved replace the configured ones');
+        self::assertSame(['upm', 'git'], array_column(self::arrayAt($resolved, 'sources'), 'type'), 'the sources as resolved replace the configured ones');
     }
 
     public function testEveryErrorAtOnceEachNamingItsKey(): void
@@ -92,7 +94,7 @@ class HubConfigTest extends TestCase
 
     public function testBinBuildsAndChecks(): void
     {
-        file_put_contents($this->dir.'/com.acme.tool-1.0.0.tgz', Tarball::create(['package.json' => json_encode(['name' => 'com.acme.tool', 'version' => '1.0.0', 'displayName' => 'Tool'])]));
+        file_put_contents($this->dir.'/com.acme.tool-1.0.0.tgz', Tarball::create(['package.json' => (string) json_encode(['name' => 'com.acme.tool', 'version' => '1.0.0', 'displayName' => 'Tool'])]));
         file_put_contents($this->dir.'/hub.json', json_encode([
             'name' => 'Acme',
             'theme' => ['accent' => '#336699', 'logo' => 'brand/logo.png'],
@@ -108,11 +110,11 @@ class HubConfigTest extends TestCase
         exec(\sprintf('php %s build %s %s --url=https://acme.github.io/hub 2>&1', escapeshellarg($bin), escapeshellarg($this->dir.'/hub.json'), escapeshellarg($this->dir.'/_site')), $output, $code);
         self::assertSame(0, $code, implode("\n", $output));
         $manifest = json_decode((string) file_get_contents($this->dir.'/_site/-/hub.json'), true);
-        self::assertSame(['type' => 'github', 'owner' => 'acme', 'pattern' => 'unity-*'], $manifest['sources'][1], 'without --resolve-github, left for the clients');
-        self::assertSame('https://acme.github.io/hub/brand/logo.png', $manifest['theme']['logo']);
+        self::assertSame(['type' => 'github', 'owner' => 'acme', 'pattern' => 'unity-*'], self::at($manifest, 'sources', 1), 'without --resolve-github, left for the clients');
+        self::assertSame('https://acme.github.io/hub/brand/logo.png', self::at($manifest, 'theme', 'logo'));
         self::assertFileExists($this->dir.'/_site/brand/logo.png');
         self::assertFileExists($this->dir.'/_site/com.acme.tool-1.0.0.tgz');
-        self::assertSame('https://acme.github.io/hub/com.acme.tool-1.0.0.tgz', json_decode((string) file_get_contents($this->dir.'/_site/com.acme.tool'), true)['versions']['1.0.0']['dist']['tarball']);
+        self::assertSame('https://acme.github.io/hub/com.acme.tool-1.0.0.tgz', self::at(json_decode((string) file_get_contents($this->dir.'/_site/com.acme.tool'), true), 'versions', '1.0.0', 'dist', 'tarball'));
 
         file_put_contents($this->dir.'/bad.json', json_encode(['url' => 'https://acme.github.io/hub', 'sources' => [['type' => 'github', 'owner' => 'acme']]]));
         $output = [];

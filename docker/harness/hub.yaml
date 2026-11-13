@@ -1,0 +1,16 @@
+# A hub for the harness's `check` and `build` (bin/omnihub, run on the harness's packages):
+#
+#   docker compose run --rm omnihub check /omnihub/core/docker/harness/hub.yaml --url=https://acme.github.io/hub
+#   docker compose run --rm omnihub build /omnihub/core/docker/harness/hub.yaml /harness/_site --url=https://acme.github.io/hub --strict
+#
+# As it is, nothing is asked of the network. Uncomment a "github:" package (a public repository
+# whose releases carry a .tgz) or add --resolve-github to read GitHub for real: GITHUB_TOKEN in
+# .env lifts its limits.
+name: Omnihub harness
+scopes: [com.acme]
+
+packages: []
+  # - github: <owner>/<repository>
+
+sources:
+  - { name: OpenUPM, type: upm, url: https://package.openupm.com, scopes: [com.cysharp.unitask] }

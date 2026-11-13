@@ -1,0 +1,110 @@
+#!/usr/bin/env php
+<?php
+
+/*
+ * Omnihub in plain PHP: no framework, no console, no HTTP client but omnisense/contracts'
+ * recorded one. A static hub is built from GitHub's answers recorded below - a github source
+ * resolved (the owner's public repositories that match), a repository's releases and their
+ * .tgz asset, a tarball elsewhere on the web -, written to a temporary folder and read back;
+ * a host answering 429 is asked once, then held; then the script lists what PHP loaded.
+ *
+ *   docker compose run --rm omnihub bare           # what happened, in short; exit 1 when a class of a framework was loaded
+ *   docker compose run --rm omnihub bare --json    # the same, whole: every class loaded, every file since the autoloader
+ *
+ * The answers are written in the shape GitHub's REST API documents them, for an owner that
+ * does not exist (acme); nothing is sent on the network. OMNIHUB_AUTOLOAD names another
+ * autoloader than the harness's.
+ */
+
+use Omnihub\Exception\UsageLimitReachedException;
+use Omnihub\GitHub\Api;
+use Omnihub\GitHub\Owner;
+use Omnihub\GitHub\Repository;
+use Omnihub\Http\Downloader;
+use Omnihub\Source;
+use Omnihub\StaticHub;
+use Omnihub\Tarball;
+use Omnihub\TarballSource;
+use Omnisense\Contracts\Testing\RecordedHttpClient;
+
+require getenv('OMNIHUB_AUTOLOAD') ?: '/harness/vendor/autoload.php';
+
+$tgz = static fn (string $name, string $version): string => Tarball::create(['package.json' => (string) json_encode(['name' => $name, 'version' => $version, 'displayName' => ucfirst(substr($name, (int) strrpos($name, '.') + 1)), 'unity' => '2022.3'])]);
+$json = static fn (mixed $value): string => (string) json_encode($value, \JSON_UNESCAPED_SLASHES);
+$asset = 'https://github.com/acme/unity-tool/releases/download/v1.0.0/com.acme.tool-1.0.0.tgz';
+$elsewhere = 'https://packages.example.org/com.acme.extra-2.0.0.tgz';
+
+$http = RecordedHttpClient::routes([
+    '~^GET https://api\.github\.com/users/acme/repos\?~' => [200, $json([
+        ['name' => 'unity-paint', 'private' => false, 'visibility' => 'public', 'owner' => ['login' => 'acme']],
+        ['name' => 'unity-secret', 'private' => true, 'visibility' => 'private', 'owner' => ['login' => 'acme']],
+        ['name' => 'website', 'private' => false, 'visibility' => 'public', 'owner' => ['login' => 'acme']],
+    ]), ['etag' => ['"repos-1"'], 'x-ratelimit-remaining' => ['57'], 'x-ratelimit-reset' => [(string) (time() + 3600)]]],
+    '~^GET https://api\.github\.com/repos/acme/unity-paint/contents/package\.json$~' => [200, $json(['name' => 'com.acme.paint', 'displayName' => 'Acme Paint'])],
+    '~^GET https://api\.github\.com/repos/acme/unity-paint/tags\?~' => [200, $json([['name' => 'v0.9.0'], ['name' => 'v1.1.0'], ['name' => 'v1.2.0-beta']])],
+    '~^GET https://api\.github\.com/repos/acme/unity-tool/releases\?~' => [200, $json([
+        ['tag_name' => 'v1.0.0', 'draft' => false, 'published_at' => '2026-11-01T10:00:00Z', 'body' => 'The first one.', 'assets' => [['name' => 'com.acme.tool-1.0.0.tgz', 'browser_download_url' => $asset]]],
+        ['tag_name' => 'v2.0.0', 'draft' => true, 'assets' => [['name' => 'com.acme.tool-2.0.0.tgz', 'browser_download_url' => 'https://github.com/acme/unity-tool/releases/download/v2.0.0/com.acme.tool-2.0.0.tgz']]],
+    ]), ['etag' => ['"releases-1"']]],
+    '~^GET '.preg_quote($asset, '~').'$~' => [200, $tgz('com.acme.tool', '1.0.0'), ['content-type' => ['application/octet-stream']]],
+    '~^GET '.preg_quote($elsewhere, '~').'$~' => [200, $tgz('com.acme.extra', '2.0.0'), ['content-type' => ['application/octet-stream']]],
+    '~^GET https://busy\.example\.org/~' => [429, 'Too Many Requests', ['retry-after' => ['120']]],
+]);
+
+// One Api for the build: its ETags, GitHub's rate limit and the usage policy count across sources and repositories.
+$api = new Api($http);
+$sources = (new Owner($api))->resolve(Source::github('acme', 'unity-*'));
+$hub = new StaticHub('https://acme.github.io/hub', 'Acme', sources: $sources);
+$hub->add((new Repository('acme/unity-tool', $http, api: $api))->packages());
+$hub->add((new TarballSource([$elsewhere], $http))->packages());
+
+$folder = sys_get_temp_dir().'/omnihub-bare-'.bin2hex(random_bytes(4));
+$written = $hub->writeTo($folder);
+$document = json_decode((string) file_get_contents($folder.'/com.acme.tool'), true);
+$manifest = json_decode((string) file_get_contents($folder.'/-/hub.json'), true);
+foreach (array_reverse($written) as $file) {
+    @unlink($folder.'/'.$file);
+}
+foreach (['/-/v1', '/-'] as $dir) {
+    @rmdir($folder.$dir);
+}
+@rmdir($folder);
+
+$download = new Downloader($http);
+$busy = [];
+foreach ([1, 2] as $attempt) {
+    try {
+        $download('https://busy.example.org/com.acme.slow-1.0.0.tgz');
+    } catch (UsageLimitReachedException $e) {
+        $busy[] = $e->retryAfter;
+    }
+}
+
+$report = [
+    'packages' => array_map(static fn ($package) => [$package->name, array_map(static fn ($version) => $version->version, $package->versions)], $hub->packages()),
+    'sources' => array_map(static fn (Source $source) => $source->toArray(), $sources),
+    'files' => $written,
+    'tarball' => is_array($document) ? ($document['versions']['1.0.0']['dist']['tarball'] ?? null) : null,
+    'manifest' => is_array($manifest) ? ($manifest['name'] ?? null) : null,
+    'userAgent' => $http->header('User-Agent', 0),
+    'requests' => array_map(static fn (array $request) => $request['method'].' '.$request['url'], $http->requests),
+    'busy' => $busy,
+];
+$symbols = [...get_declared_classes(), ...get_declared_interfaces(), ...get_declared_traits()];
+$framework = array_values(preg_grep('~^(?:Symfony\\\\(?!Contracts\\\\|Polyfill\\\\)|(?:Illuminate|Laravel|Doctrine|Twig|GuzzleHttp|Omnibridge)\\\\)~', $symbols) ?: []);
+
+if (in_array('--json', $argv, true)) {
+    echo json_encode($report + ['loaded' => [
+        'symbols' => $symbols,
+        'files' => array_map('realpath', get_included_files()),
+        'eager' => array_map('realpath', array_values(is_file($f = dirname((string) (new ReflectionClass(Composer\Autoload\ClassLoader::class))->getFileName()).'/autoload_files.php') ? require $f : [])),
+    ]], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), "\n";
+} else {
+    echo 'Packages: ', implode(', ', array_map(static fn (array $p) => $p[0].' '.implode(' ', $p[1]), $report['packages'])), "\n";
+    echo 'Sources resolved: ', implode(', ', array_map(static fn (array $s) => ($s['package'] ?? '?').' '.($s['url'] ?? ''), $report['sources'])), "\n";
+    echo count($written), ' files written (', implode(', ', $written), ")\n";
+    echo count($http->requests), ' requests, User-Agent "', $report['userAgent'], "\"\n";
+    echo 'A host answering 429: asked once, then held (', implode(' s, ', $busy), " s left)\n";
+    echo $framework ? 'Classes of a framework loaded: '.implode(', ', $framework) : 'bare: no class of a framework loaded ('.count(get_included_files()).' files)', "\n";
+}
+exit($framework ? 1 : 0);

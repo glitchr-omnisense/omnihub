@@ -4,8 +4,10 @@ A Unity package hub, written once: the npm registry documents Unity's
 Package Manager reads from a scoped registry, the versions and their
 tarballs' hashes, and the hub manifest the hub clients read - for a forge
 that serves them per request from its database (omnibase/forge), and for a
-static hub that writes them once on GitHub Pages. No framework: PHP 8.2 and
-nothing else.
+static hub that writes them once on GitHub Pages. No framework: PHP 8.2,
+[omnisense/contracts](https://github.com/glitchr-omnisense/contracts) (the kernel
+every omni family builds on: its HTTP kit and usage policies) and Symfony's HTTP
+client contracts (interfaces only).
 
 ```php
 use Omnihub\Package;
@@ -26,11 +28,14 @@ Registry::all([$package]);                  // GET /-/all
 ```php
 use Omnihub\StaticHub;
 use Omnihub\TarballSource;
+use Symfony\Component\HttpClient\HttpClient;
 
 $hub = (new StaticHub('https://mystudio.github.io/hub', 'My Studio'))
-    ->add((new TarballSource(['https://github.com/mystudio/tool/releases/download/v1.0.0/com.mystudio.tool-1.0.0.tgz']))->packages());
+    ->add((new TarballSource(['https://github.com/mystudio/tool/releases/download/v1.0.0/com.mystudio.tool-1.0.0.tgz'], HttpClient::create()))->packages());
 $hub->writeTo('_site');   // or Omnihub\Bridge\Static\HubSite::site($hub), exported by omnibridge/static
 ```
+
+(`HttpClient` is symfony/http-client's; any client of Symfony's contracts will do.)
 
 Or from a configuration, as the GitHub template does:
 
@@ -135,6 +140,34 @@ of github.com is scraped.
 See [docs/static-hub.md](docs/static-hub.md) for what GitHub Pages serves and
 how Unity takes it, [docs/manifest.md](docs/manifest.md) for the hub manifest.
 
+## HTTP: omnisense/contracts' kit
+
+Every request omnihub makes goes through the HTTP kit of
+[omnisense/contracts](https://github.com/glitchr-omnisense/contracts), as in
+the other omni families (`Omnihub\Http\JsonClient`, `Omnihub\Http\Downloader`):
+
+- **sent once**: the client given is kept from retrying (`Http\NoRetry`), so a
+  refusal reaches omnihub and no request goes out that the usage policy did not
+  count; omnihub decides what to try again (nothing, today);
+- **a timeout** on every request (30 s without a byte for an API call, 60 s for
+  a tarball) and **omnihub's User-Agent**,
+  `omnihub (+https://github.com/glitchr-omnisense/omnihub)`;
+- **a provider's waits honoured**: a `429` and its `Retry-After` (and the
+  `RateLimit` fields) hold every further request to that host until the wait
+  is over (`Omnihub\Exception\UsageLimitReachedException`, which is the kit's
+  `UsageLimitReached`);
+- **errors without secrets**: an error status is an
+  `Omnihub\Exception\ProviderException` naming the path only (never the query),
+  a network failure an `UnreachableException`, both without the token
+  (`Http\Redaction`); every one implements `Omnihub\Exception\OmnihubException`
+  and the kit's `ExceptionInterface`.
+
+`TarballSource` takes the HTTP client (`new TarballSource($tarballs, $http)`);
+`bin/omnihub` gives it symfony/http-client's whenever it is installed
+(omnihub/github requires it). Without any HTTP client, a tarball is still read
+through PHP's streams (`TarballSource::download()`), as before. GitHub's API,
+its rate limit, ETags and usage policy: see omnihub/github.
+
 ## Providers
 
 - `omnihub/github`: a repository's published releases and their `.tgz`
@@ -143,13 +176,25 @@ how Unity takes it, [docs/manifest.md](docs/manifest.md) for the hub manifest.
 - A forge (omnibase/forge) reads its own database and serves the documents
   per request, licences deciding who sees which version.
 
-## Tests
+## Tests: the harness
+
+`docker/` is the family's harness, as in the other omni families: this core
+and every omnihub/* provider (from its checkout beside this one, or from
+GitHub), with omnisense/contracts (its checkout, or GitHub), installed together
+in a PHP 8.4 image. One service, Docker's default bridge: no network is created.
 
 ```sh
-docker run --rm -v "$PWD":/app -w /app composer:2 sh -c 'composer install && vendor/bin/phpunit'
+cd docker
+cp .env.dist .env                       # OMNIHUB_PLUGINS=../.. and OMNISENSE_CONTRACTS=../../../omnisense-contracts in a workspace
+docker compose run --rm omnihub test    # every package's PHPUnit suite, contracts' too
+docker compose run --rm omnihub phpstan # PHPStan at level max on each package
+docker compose run --rm omnihub bare    # a hub built in plain PHP from recorded answers: no class of a framework may load
+docker compose run --rm omnihub build /omnihub/core/docker/harness/hub.yaml /harness/_site --url=...   # bin/omnihub itself
 ```
 
-PHPStan (level 8, `phpstan.neon`): `vendor/bin/phpstan analyse` with
-phpstan/phpstan installed beside it.
+`tests/BareTest.php` (the kit's `BareTestCase`) checks that every class of the
+core loads with nothing but omnisense/contracts and Symfony's HTTP client
+contracts, and runs the bare script. PHPStan runs at level max; its baseline
+holds only the licensing key code's findings, and may only shrink.
 
 MIT.

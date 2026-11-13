@@ -11,6 +11,8 @@ use PHPUnit\Framework\TestCase;
 /** A hub without a server: its files, its manifest without checkout, written to a folder. */
 class StaticHubTest extends TestCase
 {
+    use Reads;
+
     public function testItsFilesAndItsManifest(): void
     {
         $hub = (new StaticHub('https://studio.github.io/hub/', 'Studio', [], [new Source(Source::GIT, 'https://github.com/x/y.git', 'A tool')], 'logo.png', '#336699'))
@@ -19,12 +21,12 @@ class StaticHubTest extends TestCase
         $files = $hub->files();
         self::assertSame(['/-/hub.json', '/-/v1/search', '/-/all', '/com.studio.one', '/'], array_keys($files), 'a package without version is left out');
         $manifest = json_decode($files['/-/hub.json'][1], true);
-        self::assertSame('Studio', $manifest['name']);
-        self::assertSame('https://studio.github.io/hub/logo.png', $manifest['logo']);
-        self::assertSame(['name' => 'Studio', 'type' => 'upm', 'url' => 'https://studio.github.io/hub', 'scopes' => ['com.studio']], $manifest['sources'][0]);
-        self::assertSame('git', $manifest['sources'][1]['type']);
-        self::assertArrayNotHasKey('checkout', $manifest, 'a static hub sells nothing');
-        self::assertSame('https://github.com/studio/one/releases/download/v1.0.0/com.studio.one-1.0.0.tgz', json_decode($files['/com.studio.one'][1], true)['versions']['1.0.0']['dist']['tarball']);
+        self::assertSame('Studio', self::at($manifest, 'name'));
+        self::assertSame('https://studio.github.io/hub/logo.png', self::at($manifest, 'logo'));
+        self::assertSame(['name' => 'Studio', 'type' => 'upm', 'url' => 'https://studio.github.io/hub', 'scopes' => ['com.studio']], self::at($manifest, 'sources', 0));
+        self::assertSame('git', self::at($manifest, 'sources', 1, 'type'));
+        self::assertArrayNotHasKey('checkout', self::arrayAt($manifest), 'a static hub sells nothing');
+        self::assertSame('https://github.com/studio/one/releases/download/v1.0.0/com.studio.one-1.0.0.tgz', self::at(json_decode($files['/com.studio.one'][1], true), 'versions', '1.0.0', 'dist', 'tarball'));
         self::assertStringContainsString('&quot;scopedRegistries&quot;', $files['/'][1]);
 
         $dir = sys_get_temp_dir().'/omnihub-static-'.bin2hex(random_bytes(4));

@@ -101,24 +101,28 @@ final class StaticHub
     private function page(): string
     {
         $e = fn (?string $text) => htmlspecialchars((string) $text, \ENT_QUOTES);
-        $manifest = $this->manifest()->toArray();
-        $registry = $manifest['sources'][0];
+        $text = fn (mixed $value): ?string => \is_scalar($value) ? (string) $value : null;
+        $hub = $this->manifest();
+        $manifest = $hub->toArray();
+        $registry = $hub->sources[0];
+        $banner = \is_array($manifest['theme'] ?? null) ? $text($manifest['theme']['banner'] ?? null) : null;
+        $logo = $text($manifest['logo'] ?? null);
         $rows = '';
         foreach ($this->packages as $package) {
             $latest = $package->latest();
-            $rows .= '<tr><td><code>'.$e($package->name).'</code></td><td>'.$e((string) $package->field('displayName', '')).'</td><td>'.$e($latest?->version).'</td><td>'.$e((string) $package->field('description', '')).'</td></tr>';
+            $rows .= '<tr><td><code>'.$e($package->name).'</code></td><td>'.$e($text($package->field('displayName', ''))).'</td><td>'.$e($latest?->version).'</td><td>'.$e($text($package->field('description', ''))).'</td></tr>';
         }
-        $scoped = (string) json_encode(['scopedRegistries' => [['name' => $this->name, 'url' => $registry['url'], 'scopes' => $registry['scopes'] ?? []]]], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES);
+        $scoped = (string) json_encode(['scopedRegistries' => [['name' => $this->name, 'url' => $registry->url, 'scopes' => $registry->scopes]]], \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES);
         $color = $this->theme?->color() ?? $this->color ?? '#222222';
 
         return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             .'<title>'.$e($this->name).'</title>'
             .'<style>body{font:16px/1.5 system-ui,sans-serif;max-width:60rem;margin:2rem auto;padding:0 1rem;color:#222}h1{border-bottom:4px solid '.$e($color).'}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:.4rem;border-bottom:1px solid #ddd;vertical-align:top}pre{background:#f4f4f4;padding:1rem;overflow:auto}</style>'
-            .(isset($manifest['theme']['banner']) ? '<img src="'.$e($manifest['theme']['banner']).'" alt="" style="width:100%;height:auto">' : '')
-            .'<h1>'.(isset($manifest['logo']) ? '<img src="'.$e($manifest['logo']).'" alt="" height="40"> ' : '').$e($this->name).'</h1>'
+            .(null !== $banner ? '<img src="'.$e($banner).'" alt="" style="width:100%;height:auto">' : '')
+            .'<h1>'.(null !== $logo ? '<img src="'.$e($logo).'" alt="" height="40"> ' : '').$e($this->name).'</h1>'
             .'<p>A Unity package hub. Add it to a project\'s <code>Packages/manifest.json</code>, then install from Window &gt; Package Manager &gt; My Registries:</p>'
             .'<pre>'.$e($scoped).'</pre>'
-            .'<p>Or point a hub client at its manifest: <a href="-/hub.json"><code>'.$e($registry['url']).'/-/hub.json</code></a>.</p>'
+            .'<p>Or point a hub client at its manifest: <a href="-/hub.json"><code>'.$e($registry->url).'/-/hub.json</code></a>.</p>'
             .($this->licensing ? '<p>Its licences are signed offline by its author; the hub\'s key, as Forge Store shows it: <code>'.$e($this->licensing->fingerprint()).'</code>.</p>' : '')
             .'<table><thead><tr><th>Package</th><th>Name</th><th>Version</th><th>Description</th></tr></thead><tbody>'.$rows.'</tbody></table>'
             .'</html>';

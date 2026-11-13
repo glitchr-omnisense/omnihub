@@ -31,7 +31,11 @@ final class Theme
         }
     }
 
-    /** A theme from hub.yaml's "theme": its keys are the manifest's. */
+    /**
+     * A theme from hub.yaml's "theme": its keys are the manifest's.
+     *
+     * @param array<mixed> $theme
+     */
     public static function fromArray(array $theme): self
     {
         if ($unknown = array_diff(array_keys($theme), self::KEYS)) {
@@ -43,10 +47,17 @@ final class Theme
             }
         }
 
-        return new self($theme['accent'] ?? null, $theme['accentDark'] ?? null, $theme['logo'] ?? null, $theme['banner'] ?? null);
+        // Checked above: each a text or absent.
+        $text = static fn (string $key): ?string => \is_string($theme[$key] ?? null) ? $theme[$key] : null;
+
+        return new self($text('accent'), $text('accentDark'), $text('logo'), $text('banner'));
     }
 
-    /** The same theme, its pictures given by $address (a relative file made absolute). */
+    /**
+     * The same theme, its pictures given by $address (a relative file made absolute).
+     *
+     * @param callable(string): string $address
+     */
     public function withPictures(callable $address): self
     {
         return new self($this->accent, $this->accentDark, null === $this->logo ? null : $address($this->logo), null === $this->banner ? null : $address($this->banner));
@@ -67,6 +78,7 @@ final class Theme
         return null === $this->accent && null === $this->accentDark && null === $this->logo && null === $this->banner;
     }
 
+    /** @return array<string, string> */
     public function toArray(): array
     {
         return array_filter(['accent' => $this->accent, 'accentDark' => $this->accentDark, 'logo' => $this->logo, 'banner' => $this->banner], fn ($value) => null !== $value);

@@ -37,6 +37,7 @@ final class HubManifest
         }
     }
 
+    /** @return array<string, mixed> */
     public function toArray(): array
     {
         $theme = $this->theme && !$this->theme->isEmpty() ? $this->theme : null;

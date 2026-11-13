@@ -100,21 +100,40 @@ final class Tarball
         return $files;
     }
 
-    /** Its package.json, wherever the tarball keeps it (package/package.json for npm pack). */
+    /**
+     * Its package.json, wherever the tarball keeps it (package/package.json for npm pack).
+     *
+     * @return array<string, mixed>|null
+     */
     public static function manifest(string $bytes): ?array
     {
         $files = self::read($bytes);
         foreach (['package/package.json', 'package.json'] as $path) {
             if (isset($files[$path])) {
-                return json_decode($files[$path], true) ?: null;
+                return self::object($files[$path]);
             }
         }
         foreach ($files as $path => $content) {
             if (preg_match('~^[^/]+/package\.json$~', $path)) {
-                return json_decode($content, true) ?: null;
+                return self::object($content);
             }
         }
 
         return null;
+    }
+
+    /** @return array<string, mixed>|null a JSON object's members; null for anything else, or nothing */
+    private static function object(string $json): ?array
+    {
+        $decoded = json_decode($json, true);
+        if (!\is_array($decoded) || !$decoded) {
+            return null;
+        }
+        $object = [];
+        foreach ($decoded as $key => $value) {
+            $object[(string) $key] = $value;
+        }
+
+        return $object;
     }
 }

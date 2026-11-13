@@ -1,0 +1,4 @@
+.env
+plugins/*
+!plugins/.gitkeep
+contracts

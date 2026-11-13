@@ -15,7 +15,11 @@ use Omnihub\Version;
  */
 final class Registry
 {
-    /** The package document ("packument"): its versions oldest first, dist-tags.latest the newest. */
+    /**
+     * The package document ("packument"): its versions oldest first, dist-tags.latest the newest.
+     *
+     * @return array<string, mixed>
+     */
     public static function document(Package $package, ?string $description = null): array
     {
         $versions = $times = [];
@@ -49,6 +53,8 @@ final class Registry
      * hold every word of the text (Unity sends the scope).
      *
      * @param iterable<Package> $packages
+     *
+     * @return array{objects: list<array<string, mixed>>, total: int, time: string}
      */
     public static function search(iterable $packages, string $text = '', int $from = 0, int $size = 250): array
     {
@@ -60,7 +66,8 @@ final class Registry
                 continue;
             }
             $keywords = \is_array($package->field('keywords')) ? array_values($package->field('keywords')) : [];
-            $haystack = mb_strtolower(implode(' ', [$package->name, (string) $package->field('displayName', ''), (string) $package->field('description', ''), implode(' ', $keywords)]));
+            $text = static fn (mixed $value): string => \is_scalar($value) ? (string) $value : '';
+            $haystack = mb_strtolower(implode(' ', [$package->name, $text($package->field('displayName', '')), $text($package->field('description', '')), implode(' ', array_map($text, $keywords))]));
             foreach ($words as $word) {
                 if (!str_contains($haystack, $word)) {
                     continue 2;
@@ -94,6 +101,8 @@ final class Registry
      * The older listing of every package, which the Package Manager reads when the search is not there.
      *
      * @param iterable<Package> $packages
+     *
+     * @return array<string, mixed>
      */
     public static function all(iterable $packages): array
     {
@@ -116,7 +125,11 @@ final class Registry
         return $all;
     }
 
-    /** JSON as npm writes it: slashes and accents as they are, an empty object as {}. */
+    /**
+     * JSON as npm writes it: slashes and accents as they are, an empty object as {}.
+     *
+     * @param array<mixed> $document
+     */
     public static function json(array $document): string
     {
         return json_encode($document, \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE | \JSON_THROW_ON_ERROR);

@@ -50,6 +50,7 @@ class SourceTest extends TestCase
         yield 'scopes not a list of texts' => [['url' => 'https://x.org', 'scopes' => [1]], 'scopes: a list of scopes'];
     }
 
+    /** @param array<string, mixed> $source */
     #[\PHPUnit\Framework\Attributes\DataProvider('wrong')]
     public function testAWrongSourceSaysWhy(array $source, string $message): void
     {

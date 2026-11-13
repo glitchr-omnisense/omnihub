@@ -70,6 +70,8 @@ final class Source
     /**
      * A source from a configuration's entry - hub.yaml's "sources", or a hub.json's. Every error
      * names the key it is about.
+     *
+     * @param array<mixed> $source
      */
     public static function fromArray(array $source): self
     {
@@ -93,7 +95,10 @@ final class Source
             throw new \InvalidArgumentException('scopes: a list of scopes, ["com.mystudio"].');
         }
 
-        return new self($type, $source['url'] ?? '', $source['name'] ?? null, array_values($scopes), $source['catalog'] ?? null, $source['owner'] ?? null, $source['pattern'] ?? null, $source['install'] ?? false, $source['package'] ?? null);
+        // Checked above: each of these a text or absent, the scopes texts.
+        $text = static fn (string $key): ?string => \is_string($source[$key] ?? null) ? $source[$key] : null;
+
+        return new self($type, $text('url') ?? '', $text('name'), array_values(array_filter($scopes, 'is_string')), $text('catalog'), $text('owner'), $text('pattern'), $source['install'] ?? false, $text('package'));
     }
 
     /**
@@ -118,6 +123,7 @@ final class Source
         return false;
     }
 
+    /** @return array<string, string|bool|list<string>> */
     public function toArray(): array
     {
         if (self::GITHUB === $this->type) {

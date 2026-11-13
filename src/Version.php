@@ -30,7 +30,11 @@ final class Version
         return $this->sha512 ? 'sha512-'.base64_encode((string) hex2bin($this->sha512)) : null;
     }
 
-    /** A version of a tarball's bytes: its hashes taken here. */
+    /**
+     * A version of a tarball's bytes: its hashes taken here.
+     *
+     * @param array<string, mixed> $manifest its package.json
+     */
     public static function ofTarball(string $version, array $manifest, string $tarballUrl, string $bytes, ?\DateTimeImmutable $publishedAt = null, ?string $changelog = null): self
     {
         return new self($version, $manifest, $tarballUrl, sha1($bytes), hash('sha512', $bytes), $publishedAt, $changelog);

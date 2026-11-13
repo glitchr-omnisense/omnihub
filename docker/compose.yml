@@ -1,0 +1,37 @@
+# omnisense/omnihub with every provider package:
+#
+#   cp .env.dist .env                                          # GITHUB_TOKEN when you have one (it lifts GitHub's limits)
+#   docker compose run --rm omnihub bare                       # plain PHP: a hub built from recorded answers, and what PHP loaded
+#   docker compose run --rm omnihub test                       # every package's tests
+#   docker compose run --rm omnihub phpstan                    # PHPStan at level max on every package
+#   docker compose run --rm omnihub check /omnihub/core/docker/harness/hub.yaml --url=https://acme.github.io/hub
+#   docker compose run --rm omnihub build /omnihub/core/docker/harness/hub.yaml /harness/_site --url=https://acme.github.io/hub
+#                                                              # bin/omnihub itself, on GitHub for real
+#
+# Providers come from GitHub (branch main) unless their checkout sits under
+# OMNIHUB_PLUGINS (set it to ../.. in .env when this core sits in the
+# workspace beside them): then that checkout is what runs.
+# omnisense/contracts likewise: its checkout under OMNISENSE_CONTRACTS (../../../omnisense-contracts
+# in .env when it sits beside the family's folder), its tests run with the family's; GitHub otherwise.
+name: omnihub-harness
+
+services:
+  omnihub:
+    build: .
+    image: omnisense/omnihub-harness
+    # The image may be another family's harness tagged (the same PHP 8.4 Alpine with Composer): the
+    # entrypoint is named here, not taken from the image.
+    entrypoint: ["/omnihub/core/docker/entrypoint.sh"]
+    # One service, no server beside it: Docker's default bridge, no network of its own to create.
+    network_mode: bridge
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ..:/omnihub/core
+      - ${OMNIHUB_PLUGINS:-./plugins}:/omnihub/plugins:ro
+      - ${OMNISENSE_CONTRACTS:-./contracts}:/omnisense/contracts:ro
+      - harness:/harness
+
+volumes:
+  harness:

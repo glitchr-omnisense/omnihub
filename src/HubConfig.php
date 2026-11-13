@@ -74,8 +74,9 @@ final class HubConfig
     }
 
     /**
-     * @param string|null $url       the hub's address, when the configuration does not give it (--url)
-     * @param string|null $directory where its files are: given, they must be there
+     * @param array<mixed> $settings  hub.yaml or hub.json, decoded
+     * @param string|null  $url       the hub's address, when the configuration does not give it (--url)
+     * @param string|null  $directory where its files are: given, they must be there
      */
     public static function fromArray(array $settings, ?string $url = null, ?string $directory = null, string $label = 'hub.yaml'): self
     {
@@ -193,7 +194,11 @@ final class HubConfig
             if ('file' === $kinds[0]) {
                 $copy[] = ltrim($value, '/');
             }
-            $packages[] = $entry;
+            $keyed = [];
+            foreach ($entry as $key => $setting) {
+                $keyed[(string) $key] = $setting;
+            }
+            $packages[] = $keyed;
         }
 
         foreach ($list('copy', $settings['copy'] ?? null) as $i => $file) {
@@ -232,7 +237,7 @@ final class HubConfig
                 }
             }
             foreach ($packages as $entry) {
-                if (isset($entry['file']) && !is_file(rtrim($directory, '/').'/'.ltrim($entry['file'], '/'))) {
+                if (\is_string($entry['file'] ?? null) && !is_file(rtrim($directory, '/').'/'.ltrim($entry['file'], '/'))) {
                     $errors[] = \sprintf('packages: "%s" is not beside the configuration.', $entry['file']);
                 }
             }
@@ -245,7 +250,11 @@ final class HubConfig
         return new self($name, $address, $scopes, $logo, $color, $theme, $sources, $packages, array_values(array_unique($copy)), $licensing);
     }
 
-    /** The "github" sources: what omnihub/github may resolve at build time (bin/omnihub --resolve-github). */
+    /**
+     * The "github" sources: what omnihub/github may resolve at build time (bin/omnihub --resolve-github).
+     *
+     * @return list<Source>
+     */
     public function githubSources(): array
     {
         return array_values(array_filter($this->sources, fn (Source $source) => Source::GITHUB === $source->type));
