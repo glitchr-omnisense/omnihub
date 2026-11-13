@@ -1,6 +1,38 @@
 # Changelog
 
-## Unreleased
+## [Unreleased]
+
+## [1.0.0] - 2026-11-13
+
+The first stable version. It requires `omnisense/contracts` `^1.0` with no
+stability flag, so `composer require omnisense/omnihub` installs it in a
+project with Composer's default minimum-stability; the 1.x series follows
+semantic versioning. A tag `vX.Y.Z` is released by
+`.github/workflows/release.yml` once the package's CI passes on it.
+
+- What a forge (omnibase/forge) needs to serve its whole registry and hub
+  manifest through omnihub:
+  - `Registry::search(..., string $publisher = 'omnihub')`: the hub names
+    itself in `publisher.username`; an empty `"keywords": []` stays in the
+    search, as in the listing; an empty display name or description is left
+    out of the search and the listing.
+  - `Package`'s `$displayName` and `$description`: the caller's defaults (a
+    forge's software name and tagline) when the newest package.json has none,
+    read by `field()`, so by the search, the listing and the package document.
+  - `HubManifest`: `licenses` (a forge's licence API: list, activate,
+    release); `checkout` takes, after `device` and `token`, a forge's one-click
+    purchase addresses (`quote`, `purchases`, `methods`), every one checked as
+    an address; the keys in the forge's order (`sources`, `games`,
+    `checkout`, `licenses`, then `licensing` and `licensed`);
+    `HubManifest::scopesOf()` for the default scopes (StaticHub uses it).
+  - `Licensing` writes `algorithm: "Ed25519"` first, as a forge does, and
+    reads it back (any other value is refused).
+- `.github/workflows/ci.yml` (glitchr-studio/ci's php-package workflow) and
+  `release.yml`; PHPStan's baseline file, empty; `omnibridge/static` and
+  `symfony/yaml` in require-dev, for PHPStan on the package alone.
+- The README opens on the install line and a first call with no account and
+  no network.
+
 
 - Offline licences that Forge Store 1.5.0, Forge Seal 1.1.0 and Forge Hub 1.3.1
   accept (format 2, bound to the hub's registry and the package):
@@ -33,7 +65,7 @@
   links them.
 - PHPStan's baseline is gone: the licensing files' findings are fixed.
 
-- On omnisense/contracts (`^1.0@dev`), the kernel of the omni families, and
+- On omnisense/contracts (`^1.0`), the kernel of the omni families, and
   `symfony/http-client-contracts`: every request through the kit's HTTP client
   (`Omnihub\Http\JsonClient`, `Omnihub\Http\Downloader`) - sent once
   (`Http\NoRetry`: no retry by the application's client), a timeout (30 s idle
@@ -90,8 +122,6 @@
   export error.
 - The hub clients named as they are now: Forge Store (`io.glitchr.store`),
   Forge Hub.
-
-## 1.0.0
 
 - A Unity package hub written once: the UPM registry documents, the hub
   manifest, a static hub for GitHub Pages, `bin/omnihub build`.

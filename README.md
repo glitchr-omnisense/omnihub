@@ -9,19 +9,63 @@ static hub that writes them once on GitHub Pages. No framework: PHP 8.2,
 every omni family builds on: its HTTP kit and usage policies) and Symfony's HTTP
 client contracts (interfaces only).
 
+## Installation and a first call
+
+```sh
+composer require omnisense/omnihub
+```
+
+No account and no network for the documents themselves: a package, its
+versions (the package.json and the tarball's address and bytes), and the
+registry's answers.
+
 ```php
+require __DIR__.'/vendor/autoload.php';
+
 use Omnihub\Package;
 use Omnihub\Upm\Registry;
 use Omnihub\Version;
 
 $package = new Package('com.mystudio.tool', [
-    Version::ofTarball('1.0.0', $packageJson, 'https://example.org/com.mystudio.tool-1.0.0.tgz', $tarballBytes),
+    Version::ofTarball('1.0.0', ['displayName' => 'Tool', 'unity' => '2022.3'], 'https://example.org/com.mystudio.tool-1.0.0.tgz', 'the .tgz bytes'),
 ]);
 
-Registry::document($package);              // GET /<name>: versions, dist.tarball, dist.shasum, dist.integrity
-Registry::search([$package], 'com.mystudio'); // GET /-/v1/search
-Registry::all([$package]);                  // GET /-/all
+echo Registry::json(Registry::document($package)), "\n";      // GET /<name>: versions, dist.tarball, shasum, integrity
+echo Registry::json(Registry::search([$package], 'com.mystudio')), "\n"; // GET /-/v1/search
+echo Registry::json(Registry::all([$package])), "\n";          // GET /-/all
 ```
+
+A static hub on GitHub Pages needs `symfony/yaml` (to read `hub.yaml`),
+`omnihub/github` (packages from GitHub releases; anonymous, or a token of
+your own for a higher rate limit) and `omnibridge/static`; the
+[template](https://github.com/glitchr-studio/unity-hub-template) has them.
+Selling with offline licences needs PHP's sodium extension (bundled with
+PHP) and nothing else: no payment account is involved in omnihub.
+
+## A forge
+
+A forge with a database (omnibase/forge) keeps its accounts, licences and
+routes, and hands omnihub one `Package` per request, holding only the
+versions the caller may install:
+
+```php
+$package = new Package($name, $installableVersions, $homepage, $repository,
+    displayName: $software->name, description: $tagline);  // used when the package.json has none
+
+Registry::document($package);
+Registry::search($listing, $text, $from, $size, publisher: 'mystudio'); // publisher.username, "omnihub" by default
+Registry::all($listing);
+
+(new HubManifest('My Studio', [$ownRegistry], $logo, '#336699', $gamesUrl,
+    checkout: ['device' => $device, 'token' => $token, 'quote' => $quote, 'purchases' => $purchases, 'methods' => $methods],
+    licensing: new Licensing($publicKey, $previousKey, $rotation, registry: $registryUrl, previousKeyValidUntil: $until),
+    licenses: ['list' => $list, 'activate' => $activate, 'release' => $release],
+))->toArray();   // the keys in the order a forge serves them; HubManifest::scopesOf() for default scopes
+```
+
+`Omnihub\Tarball::create()` writes the package's `.tgz` byte for byte as a
+forge did (`package/` prefix, sorted, ustar, gzip level 9), so its shasum
+does not change.
 
 ## A static hub
 
@@ -297,7 +341,8 @@ docker compose run --rm omnihub build /omnihub/core/docker/harness/hub.yaml /har
 
 `tests/BareTest.php` (the kit's `BareTestCase`) checks that every class of the
 core loads with nothing but omnisense/contracts and Symfony's HTTP client
-contracts, and runs the bare script. PHPStan runs at level max, without a
-baseline.
+contracts, and runs the bare script. PHPStan runs at level max; its baseline is empty. The
+package alone (no provider) runs in GitHub Actions: `.github/workflows/ci.yml`
+(glitchr-studio/ci's php-package workflow), and `release.yml` on a `v*` tag.
 
 MIT.

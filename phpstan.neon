@@ -1,6 +1,8 @@
-# PHPStan at the highest level, as the family's harness runs it (docker compose run --rm omnihub
-# phpstan, in omnisense/omnihub's docker/). Anything PHPStan reports fails; there is no
-# baseline.
+# PHPStan at the highest level, as the family's harness (docker compose run --rm omnihub phpstan, in
+# docker/) and glitchr-studio/ci's workflow run it. phpstan-baseline.neon is empty: nothing is
+# accepted, anything PHPStan reports fails.
+includes:
+    - phpstan-baseline.neon
 
 parameters:
     level: max
