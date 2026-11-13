@@ -26,6 +26,7 @@
         "phpunit/phpunit": "^11.0"
     },
     "suggest": {
+        "ext-sodium": "A hub's licensing key: its rotation checked, and the author's omnihub key / licence commands (PHP bundles it)",
         "omnihub/github": "A static hub's packages read from GitHub: each repository's releases, their .tgz assets and package.json",
         "omnibridge/static": "To export a static hub (Omnihub\\Bridge\\Static\\HubSite) to a folder GitHub Pages serves",
         "symfony/yaml": "To read hub.yaml (bin/omnihub); hub.json needs nothing"

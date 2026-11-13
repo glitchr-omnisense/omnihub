@@ -6,6 +6,17 @@
  *               [--resolve-github [--github-cache=<file>]]
  * omnihub check <hub.yaml|hub.json> [--url=...]
  *
+ * omnihub key generate <private-key-file>            a new Ed25519 pair: the private key written to that file
+ *                                                    only (0600, never over a file), the public key printed
+ * omnihub key public <private-key-file>              the public key of a private key: hub.yaml's licensing
+ * omnihub key rotate <old-private-key-file> <new-public-key|new-private-key-file>
+ *                                                    the licensing section that hands the hub over to a new key
+ * omnihub licence sign <private-key-file> <payload.json|->
+ *                                                    a licence token signed offline, in Forge Seal's form
+ *
+ * The private key lives on the author's machine, outside the hub's repository: nothing here prints
+ * it, and the build refuses to publish a file that holds one.
+ *
  * A static hub: reads the configuration (every error at once, each naming its key), reads every
  * package (a provider per entry: github: owner/repository through omnihub/github, file: <path>,
  * tarball: <address>), writes the registry and the hub manifest to the folder - with
@@ -28,8 +39,11 @@ foreach (array_filter([$GLOBALS['_composer_autoload_path'] ?? null, __DIR__.'/..
 use Omnihub\Bridge\Static\HubSite;
 use Omnihub\HubConfig;
 use Omnihub\InvalidHubConfig;
+use Omnihub\SigningKey;
 use Omnihub\Source;
 use Omnihub\TarballSource;
+
+const OMNIHUB_KEY_USAGE = "omnihub key generate <private-key-file>\nomnihub key public <private-key-file>\nomnihub key rotate <old-private-key-file> <new-public-key|new-private-key-file>\nomnihub licence sign <private-key-file> <payload.json|->\n";
 
 $args = array_slice($argv, 1);
 $options = [];
@@ -41,8 +55,12 @@ foreach ($args as $i => $arg) {
     }
 }
 [$command, $config, $out] = array_values($args) + [null, null, null];
+
+if ('key' === $command || 'licence' === $command || 'license' === $command) {
+    exit(omnihub_keys(array_values($args), $options));
+}
 if (!('build' === $command && $config && $out) && !('check' === $command && $config)) {
-    fwrite(STDERR, "omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository] [--strict] [--resolve-github [--github-cache=<file>]]\nomnihub check <hub.yaml|hub.json> [--url=...]\n");
+    fwrite(STDERR, "omnihub build <hub.yaml|hub.json> <folder> [--url=https://owner.github.io/repository] [--strict] [--resolve-github [--github-cache=<file>]]\nomnihub check <hub.yaml|hub.json> [--url=...]\n".OMNIHUB_KEY_USAGE);
     exit(2);
 }
 
@@ -53,7 +71,7 @@ try {
     exit(1);
 }
 if ('check' === $command) {
-    fwrite(STDOUT, sprintf("%s: %d packages, %d sources, %s.\n", $config, count($settings->packages), count($settings->sources), $settings->theme ? 'a theme' : 'no theme'));
+    fwrite(STDOUT, sprintf("%s: %d packages, %d sources, %s, %s.\n", $config, count($settings->packages), count($settings->sources), $settings->theme ? 'a theme' : 'no theme', $settings->licensing ? 'a licensing key ('.$settings->licensing->fingerprint().($settings->licensing->rotation ? ', a verified rotation' : '').')' : 'no licensing key'));
     exit(0);
 }
 
@@ -149,3 +167,72 @@ if (class_exists(\Omnibridge\Static\Exporter::class)) {
 // --strict: a package or a source that could not be read, or an export error (a broken link), fails
 // the build (the hub is written anyway).
 exit($failures && isset($options['strict']) ? 1 : 0);
+
+/**
+ * omnihub key ... / omnihub licence sign: the author's keys, on the author's machine.
+ *
+ * @param list<string>               $args
+ * @param array<string, string|true> $options
+ */
+function omnihub_keys(array $args, array $options): int
+{
+    [$command, $action, $first, $second] = $args + [null, null, null, null];
+    $section = fn (string $yaml) => fwrite(STDOUT, "\nIn hub.yaml:\n\n".$yaml."\n");
+    try {
+        switch ("$command $action") {
+            case 'key generate':
+                if (!$first) {
+                    break;
+                }
+                $key = SigningKey::generate();
+                $key->writeTo($first);
+                fwrite(STDOUT, sprintf("Private key written to %s (readable by you only). Keep it there, or in a password manager - never in the hub's repository; whoever has it signs licences for your hub.\n", $first));
+                if ($tree = SigningKey::gitWorkTree($first)) {
+                    fwrite(STDERR, sprintf("\nWarning: %s is inside the git work tree %s. Move the key out of it (and out of any synced folder) before you commit or push anything there.\n", $first, $tree));
+                }
+                $section(sprintf("licensing:\n  publicKey: \"%s\"\n", $key->publicKey()));
+
+                return 0;
+            case 'key public':
+                if (!$first) {
+                    break;
+                }
+                fwrite(STDOUT, SigningKey::fromFile($first)->publicKey()."\n");
+
+                return 0;
+            case 'key rotate':
+                if (!$first || !$second) {
+                    break;
+                }
+                $new = is_file($second) ? SigningKey::fromFile($second)->publicKey() : $second;
+                $licensing = SigningKey::fromFile($first)->rotateTo($new);
+                fwrite(STDOUT, "The old key hands the hub over to the new one: Forge Store moves its users' pin without asking them.\nKeep signing licences with the new private key from now on.\n");
+                $section(sprintf("licensing:\n  publicKey: \"%s\"\n  previousKey: \"%s\"\n  rotation: \"%s\"\n", $licensing->publicKey, $licensing->previousKey, $licensing->rotation));
+
+                return 0;
+            case 'licence sign':
+            case 'license sign':
+                if (!$first || !$second) {
+                    break;
+                }
+                $json = '-' === $second ? stream_get_contents(STDIN) : @file_get_contents($second);
+                if (false === $json) {
+                    throw new RuntimeException(sprintf('%s: cannot be read.', $second));
+                }
+                $payload = json_decode((string) $json, true);
+                if (!is_array($payload) || array_is_list($payload)) {
+                    throw new RuntimeException(sprintf('%s: the licence\'s payload, a JSON object.', $second));
+                }
+                fwrite(STDOUT, SigningKey::fromFile($first)->signToken($payload)."\n");
+
+                return 0;
+        }
+    } catch (RuntimeException|InvalidArgumentException $e) {
+        fwrite(STDERR, $e->getMessage()."\n");
+
+        return 1;
+    }
+    fwrite(STDERR, OMNIHUB_KEY_USAGE);
+
+    return 2;
+}

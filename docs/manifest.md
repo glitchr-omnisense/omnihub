@@ -14,7 +14,8 @@ What a hub client reads first: Forge Store, the window in the Unity editor
     {"name": "My Studio", "type": "upm", "url": "https://mystudio.github.io/hub", "scopes": ["com.mystudio"]},
     {"name": "A tool", "type": "git", "url": "https://github.com/acme/unity-tool.git", "package": "com.acme.tool"},
     {"name": "Acme on GitHub", "type": "github", "owner": "acme", "pattern": "unity-*"}
-  ]
+  ],
+  "licensing": {"publicKey": "5Wr6MvD/0ktioPo2QsSyiHKTCPeraqZf94+MwEYZ6cc="}
 }
 ```
 
@@ -28,6 +29,15 @@ What a hub client reads first: Forge Store, the window in the Unity editor
   `#rrggbb`, Unity's light and dark skins), `logo` and `banner` (https://
   pictures of 1 MB at most). `color` and `logo`, the older keys, are written
   too (the accent as `#rrggbb`) for the clients that read no theme.
+- `licensing`: the Ed25519 public key the hub's licences are signed with,
+  data only - `publicKey` (32 bytes, standard base64 with its padding).
+  After a change of key, `previousKey` and `rotation` too: the previous key's
+  Ed25519 signature of the UTF-8 text `forge-key-rotation:v1:` followed by
+  `publicKey`. Forge Store pins the first key it reads (trust on first use)
+  and moves the pin on a rotation that verifies with the pinned key; any
+  other change waits for the user. `Omnihub\Licensing` checks it (the
+  rotation with sodium); a static hub's author makes the keys with
+  `omnihub key` (README, "Licences signed offline").
 - `games`: where a forge lists its games (a static hub has none).
 - `checkout`: `{"device": ..., "token": ...}`, a forge's device flow to buy
   and link an editor. A client shows "Buy" only when it is there; a static

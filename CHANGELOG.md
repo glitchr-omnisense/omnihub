@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `licensing` in `hub.yaml` and in the manifest (`Omnihub\Licensing`): the
+  Ed25519 public key a hub's licences are signed with, and after a change of
+  key the previous key with its rotation signature - written as Forge Store
+  reads and pins it, checked by `omnihub check` (length, standard base64,
+  the rotation verified with sodium; a private key refused without being
+  repeated). The hub's page shows the key's fingerprint.
+- `omnihub key generate|public|rotate` and `omnihub licence sign`
+  (`Omnihub\SigningKey`): the author's key pair, the private key written only
+  to the path given (0600, never over a file, a warning inside a git work
+  tree), a rotation signed by the old key, a licence token in Forge Seal's
+  form. A file of `copy` that holds a private key is refused.
 - `github` sources: an owner (organisation or user) and a pattern of
   repository names (`unity-*`, several globs separated by commas), an
   optional `install`; written into `hub.json` as Forge Store reads them, and

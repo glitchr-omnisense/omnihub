@@ -35,6 +35,7 @@ final class StaticHub
         public readonly ?string $logo = null,
         public readonly ?string $color = null,
         public readonly ?Theme $theme = null,
+        public readonly ?Licensing $licensing = null,
     ) {
     }
 
@@ -76,6 +77,7 @@ final class StaticHub
             $this->logo ? $address($this->logo) : null,
             $this->color,
             theme: $this->theme?->withPictures($address),
+            licensing: $this->licensing,
         );
     }
 
@@ -117,6 +119,7 @@ final class StaticHub
             .'<p>A Unity package hub. Add it to a project\'s <code>Packages/manifest.json</code>, then install from Window &gt; Package Manager &gt; My Registries:</p>'
             .'<pre>'.$e($scoped).'</pre>'
             .'<p>Or point a hub client at its manifest: <a href="-/hub.json"><code>'.$e($registry['url']).'/-/hub.json</code></a>.</p>'
+            .($this->licensing ? '<p>Its licences are signed offline by its author; the hub\'s key, as Forge Store shows it: <code>'.$e($this->licensing->fingerprint()).'</code>.</p>' : '')
             .'<table><thead><tr><th>Package</th><th>Name</th><th>Version</th><th>Description</th></tr></thead><tbody>'.$rows.'</tbody></table>'
             .'</html>';
     }

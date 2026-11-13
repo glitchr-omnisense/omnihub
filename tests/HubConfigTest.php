@@ -68,7 +68,7 @@ class HubConfigTest extends TestCase
             self::fail('A wrong configuration is refused.');
         } catch (InvalidHubConfig $e) {
             self::assertSame([
-                'colour: not a key of a hub (name, url, scopes, logo, color, theme, packages, sources, copy).',
+                'colour: not a key of a hub (name, url, scopes, logo, color, theme, licensing, packages, sources, copy).',
                 'url: the hub\'s address, https://<owner>.github.io/<repository> - in the configuration or --url.',
                 'scopes[0]: a scope is reverse-domain, "com.mystudio", not "Com Acme".',
                 'color: a text, not int.',
@@ -103,7 +103,7 @@ class HubConfigTest extends TestCase
 
         exec(\sprintf('php %s check %s --url=https://acme.github.io/hub 2>&1', escapeshellarg($bin), escapeshellarg($this->dir.'/hub.json')), $output, $code);
         self::assertSame(0, $code, implode("\n", $output));
-        self::assertStringContainsString('1 packages, 1 sources, a theme.', implode("\n", $output));
+        self::assertStringContainsString('1 packages, 1 sources, a theme, no licensing key.', implode("\n", $output));
 
         exec(\sprintf('php %s build %s %s --url=https://acme.github.io/hub 2>&1', escapeshellarg($bin), escapeshellarg($this->dir.'/hub.json'), escapeshellarg($this->dir.'/_site')), $output, $code);
         self::assertSame(0, $code, implode("\n", $output));

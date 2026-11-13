@@ -5,8 +5,9 @@ namespace Omnihub;
 /**
  * The hub manifest the hub clients read first - Forge Store, the Unity window (io.glitchr.store),
  * Forge Hub, the desktop app: the hub's name, logo and colour, its theme, its sources, where its
- * games are, and, only for a hub that sells, its checkout (a device flow). A static hub never
- * declares one.
+ * games are, the public key its licences are signed with (licensing), and, only for a hub that
+ * sells through a server, its checkout (a device flow). A static hub never declares a checkout; it
+ * may declare a licensing key, its author signing the licences offline.
  */
 final class HubManifest
 {
@@ -24,6 +25,7 @@ final class HubManifest
         public readonly ?string $games = null,
         public readonly ?array $checkout = null,
         public readonly ?Theme $theme = null,
+        public readonly ?Licensing $licensing = null,
     ) {
         if (null !== $color && !preg_match('/^#[0-9a-fA-F]{6}$/', $color)) {
             throw new \InvalidArgumentException(\sprintf('color: a colour is #rrggbb, not "%s".', $color));
@@ -46,6 +48,7 @@ final class HubManifest
             'logo' => $this->logo ?? $theme?->logo,
             'color' => $this->color ?? $theme?->color(),
             'theme' => $theme?->toArray(),
+            'licensing' => $this->licensing?->toArray(),
             'sources' => array_map(fn (Source $source) => $source->toArray(), $this->sources),
             'games' => $this->games,
             'checkout' => $this->checkout,

@@ -8,13 +8,14 @@ namespace Omnihub;
  *
  *   name, url, scopes, logo, color   the hub
  *   theme                            {accent, accentDark, logo, banner}: its look in the hub clients
+ *   licensing                        {publicKey, previousKey, rotation}: the public key its licences are signed with
  *   packages                         its own packages: {github: owner/name}, {file: path}, {tarball: address}
  *   sources                          what else its manifest lists: upm, git, github (owner + pattern)
  *   copy                             files of the hub's repository published with it
  */
 final class HubConfig
 {
-    public const KEYS = ['name', 'url', 'scopes', 'logo', 'color', 'theme', 'packages', 'sources', 'copy'];
+    public const KEYS = ['name', 'url', 'scopes', 'logo', 'color', 'theme', 'licensing', 'packages', 'sources', 'copy'];
 
     /** The biggest picture Forge Store draws: 1 MB. */
     public const PICTURE_BYTES = 1048576;
@@ -38,6 +39,7 @@ final class HubConfig
         public readonly array $sources,
         public readonly array $packages,
         public readonly array $copy,
+        public readonly ?Licensing $licensing = null,
     ) {
     }
 
@@ -138,6 +140,15 @@ final class HubConfig
             }
         }
 
+        $licensing = null;
+        if (\array_key_exists('licensing', $settings) && null !== $settings['licensing']) {
+            if ($problems = Licensing::problems($settings['licensing'])) {
+                array_push($errors, ...$problems);
+            } else {
+                $licensing = Licensing::fromArray($settings['licensing']);
+            }
+        }
+
         $sources = [];
         foreach ($list('sources', $settings['sources'] ?? null) as $i => $entry) {
             if (!\is_array($entry)) {
@@ -213,6 +224,13 @@ final class HubConfig
             }
         }
         if (null !== $directory) {
+            // A private key is never published, even when asked: the files copied with the hub are read first.
+            foreach (array_unique($copy) as $file) {
+                $path = rtrim($directory, '/').'/'.$file;
+                if (is_file($path) && filesize($path) <= 256 && SigningKey::looksLikePrivateKey((string) file_get_contents($path))) {
+                    $errors[] = \sprintf('copy: "%s" holds a private signing key - it is never published with the hub; move it out of the repository (and make a new pair if it was ever committed).', $file);
+                }
+            }
             foreach ($packages as $entry) {
                 if (isset($entry['file']) && !is_file(rtrim($directory, '/').'/'.ltrim($entry['file'], '/'))) {
                     $errors[] = \sprintf('packages: "%s" is not beside the configuration.', $entry['file']);
@@ -224,7 +242,7 @@ final class HubConfig
             throw new InvalidHubConfig($label, $errors);
         }
 
-        return new self($name, $address, $scopes, $logo, $color, $theme, $sources, $packages, array_values(array_unique($copy)));
+        return new self($name, $address, $scopes, $logo, $color, $theme, $sources, $packages, array_values(array_unique($copy)), $licensing);
     }
 
     /** The "github" sources: what omnihub/github may resolve at build time (bin/omnihub --resolve-github). */
@@ -236,6 +254,6 @@ final class HubConfig
     /** @param list<Source>|null $sources the sources as resolved, else as configured */
     public function hub(?array $sources = null): StaticHub
     {
-        return new StaticHub($this->url, $this->name, $this->scopes, $sources ?? $this->sources, $this->logo, $this->color, $this->theme);
+        return new StaticHub($this->url, $this->name, $this->scopes, $sources ?? $this->sources, $this->logo, $this->color, $this->theme, $this->licensing);
     }
 }
