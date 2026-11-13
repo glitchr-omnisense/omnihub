@@ -22,6 +22,11 @@
  * tarball: <address>), writes the registry and the hub manifest to the folder - with
  * omnibridge/static when installed, directly otherwise.
  *
+ * Every request goes through symfony/http-client when it is installed (omnihub/github requires
+ * it) and omnisense/contracts' kit: sent once (no retry), a timeout, omnihub's User-Agent, a
+ * Retry-After honoured, errors without a token or a query. GitHub's API is read by one client for
+ * the whole build, so its rate limit and its kept ETags count across entries and sources.
+ *
  * A "github" source (owner + pattern) is written into hub.json as it is, for the hub clients to
  * resolve. With --resolve-github, omnihub/github resolves it now instead: the owner's public
  * repositories that match, each a "git" source at its newest tag (ETag and rate limit respected;
@@ -76,14 +81,20 @@ if ('check' === $command) {
 }
 
 $failures = [];
+// One HTTP client for every request when symfony/http-client is installed; PHP's streams for the tarballs otherwise.
+$http = class_exists(Symfony\Component\HttpClient\HttpClient::class) ? Symfony\Component\HttpClient\HttpClient::create() : null;
+// GitHub's API, made once when an entry or a source needs it: GITHUB_TOKEN, the ETags kept in --github-cache.
+$api = null;
+$github = function () use (&$api, $http, $options): object {
+    return $api ??= Omnihub\GitHub\Api::fromEnvironment(is_string($options['github-cache'] ?? null) ? $options['github-cache'] : null, $http);
+};
 $sources = $settings->sources;
 if (isset($options['resolve-github']) && $settings->githubSources()) {
     if (!class_exists('Omnihub\\GitHub\\Owner')) {
         fwrite(STDERR, "--resolve-github needs omnihub/github (composer require omnihub/github).\n");
         exit(2);
     }
-    $api = Omnihub\GitHub\Api::fromEnvironment(is_string($options['github-cache'] ?? null) ? $options['github-cache'] : null);
-    $owner = new Omnihub\GitHub\Owner($api);
+    $owner = new Omnihub\GitHub\Owner($github());
     $sources = [];
     foreach ($settings->sources as $source) {
         if (Source::GITHUB !== $source->type) {
@@ -102,7 +113,6 @@ if (isset($options['resolve-github']) && $settings->githubSources()) {
             fwrite(STDERR, sprintf(" ! github %s: %s (left for the hub clients to resolve)\n", $label, $e->getMessage()));
         }
     }
-    $api->save();
 }
 $hub = $settings->hub($sources);
 $url = $settings->url;
@@ -118,7 +128,7 @@ foreach ($settings->packages as $entry) {
         }
         // One repository that cannot be read does not keep the others from being published.
         try {
-            $repository = $class::fromEnvironment((string) $entry['github'], $entry);
+            $repository = $class::fromEnvironment((string) $entry['github'], $entry, $http, $github());
             $hub->add($packages = iterator_to_array($repository->packages(), false));
             fwrite(STDOUT, sprintf(" + %s: %s\n", $entry['github'], implode(', ', array_map(fn ($p) => $p->name.' '.implode(' ', array_map(fn ($v) => $v->version, $p->versions)), $packages)) ?: 'no release with a .tgz'));
         } catch (Throwable $e) {
@@ -135,11 +145,13 @@ foreach ($settings->packages as $entry) {
 }
 if ($tarballs) {
     $local = array_column(array_filter($tarballs, fn ($t) => isset($t['local'])), 'local', 'url');
+    $download = null !== $http ? new Omnihub\Http\Downloader($http) : TarballSource::download(...);
     $hub->add((new TarballSource(
         array_map(fn ($t) => array_diff_key($t, ['local' => 1]), $tarballs),
-        fn (string $address) => isset($local[$address]) ? (string) file_get_contents($local[$address]) : TarballSource::download($address),
+        fn (string $address) => isset($local[$address]) ? (string) file_get_contents($local[$address]) : $download($address),
     ))->packages());
 }
+$api?->save();
 
 if (!is_dir($out) && !mkdir($out, 0777, true) && !is_dir($out)) {
     throw new RuntimeException(sprintf('Cannot make "%s".', $out));
